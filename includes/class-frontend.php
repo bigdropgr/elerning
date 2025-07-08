@@ -71,16 +71,125 @@ class ELearning_Frontend {
     }
     
     /**
-     * Add lesson content placeholder
+     * Add lesson content to single lesson pages
      */
     public function addLessonContent($content) {
         if (!is_singular('elearning_lesson') || !in_the_loop() || !is_main_query()) {
             return $content;
         }
         
-        $content .= '<div class="elearning-lesson-notice">';
-        $content .= '<p><em>' . __('Lesson display functionality coming next in Phase 2!', 'elearning-quiz') . '</em></p>';
+        global $post;
+        
+        // Get lesson data
+        $sections = get_post_meta($post->ID, '_lesson_sections', true) ?: [];
+        $associated_quiz = get_post_meta($post->ID, '_associated_quiz', true);
+        
+        if (empty($sections)) {
+            $content .= '<div class="elearning-lesson-notice">';
+            $content .= '<p>' . __('This lesson has no sections yet.', 'elearning-quiz') . '</p>';
+            $content .= '</div>';
+            return $content;
+        }
+        
+        // Get user progress
+        $user_session = ELearning_Database::getOrCreateUserSession();
+        $progress = ELearning_Database::getLessonProgress($post->ID, $user_session);
+        
+        // Build progress array
+        $progress_by_section = [];
+        foreach ($progress as $p) {
+            $progress_by_section[$p['section_index']] = $p;
+        }
+        
+        // Start lesson container
+        $content .= '<div class="elearning-lesson-container" data-lesson-id="' . esc_attr($post->ID) . '">';
+        
+        // Progress indicator
+        $completed_sections = 0;
+        foreach ($progress as $p) {
+            if (!empty($p['completed'])) {
+                $completed_sections++;
+            }
+        }
+        $progress_percentage = count($sections) > 0 ? ($completed_sections / count($sections)) * 100 : 0;
+        
+        $content .= '<div class="lesson-progress-overview">';
+        $content .= '<h3>' . __('Your Progress', 'elearning-quiz') . '</h3>';
+        $content .= '<div class="progress-bar">';
+        $content .= '<div class="progress-fill" style="width: ' . $progress_percentage . '%;"></div>';
         $content .= '</div>';
+        $content .= '<p class="progress-text">' . sprintf(__('%d of %d sections completed', 'elearning-quiz'), $completed_sections, count($sections)) . '</p>';
+        $content .= '</div>';
+        
+        // Render sections
+        $content .= '<div class="lesson-sections">';
+        foreach ($sections as $index => $section) {
+            $section_progress = isset($progress_by_section[$index]) ? $progress_by_section[$index] : null;
+            $is_completed = $section_progress && !empty($section_progress['completed']);
+            $is_accessible = $index === 0 || (isset($progress_by_section[$index - 1]) && !empty($progress_by_section[$index - 1]['completed']));
+            
+            $section_class = 'lesson-section';
+            if ($is_completed) {
+                $section_class .= ' completed';
+            }
+            if (!$is_accessible) {
+                $section_class .= ' locked';
+            }
+            
+            $content .= '<div class="' . $section_class . '" data-section-index="' . esc_attr($index) . '">';
+            
+            // Section header
+            $content .= '<div class="section-header">';
+            $content .= '<h3 class="section-title">';
+            if ($is_completed) {
+                $content .= '<span class="completion-icon">✓</span> ';
+            } elseif (!$is_accessible) {
+                $content .= '<span class="lock-icon">🔒</span> ';
+            }
+            $content .= esc_html($section['title']);
+            $content .= '</h3>';
+            $content .= '</div>';
+            
+            // Section content
+            if ($is_accessible) {
+                $content .= '<div class="section-content" data-section-index="' . esc_attr($index) . '">';
+                $content .= wp_kses_post($section['content']);
+                
+                if (!$is_completed) {
+                    $content .= '<div class="section-actions">';
+                    $content .= '<button type="button" class="mark-complete-btn" data-section-index="' . esc_attr($index) . '">';
+                    $content .= __('Mark as Complete', 'elearning-quiz');
+                    $content .= '</button>';
+                    $content .= '</div>';
+                }
+                
+                $content .= '</div>';
+            } else {
+                $content .= '<div class="section-locked-message">';
+                $content .= '<p>' . __('Complete the previous section to unlock this content.', 'elearning-quiz') . '</p>';
+                $content .= '</div>';
+            }
+            
+            $content .= '</div>';
+        }
+        $content .= '</div>';
+        
+        // Quiz link
+        if ($associated_quiz && $completed_sections >= count($sections)) {
+            $quiz = get_post($associated_quiz);
+            if ($quiz && $quiz->post_status === 'publish') {
+                $content .= '<div class="lesson-quiz-prompt">';
+                $content .= '<h3>' . __('Ready for the Quiz?', 'elearning-quiz') . '</h3>';
+                $content .= '<p>' . __('You have completed all sections. Test your knowledge with the quiz!', 'elearning-quiz') . '</p>';
+                $content .= '<a href="' . get_permalink($associated_quiz) . '" class="button quiz-button">' . __('Take Quiz', 'elearning-quiz') . '</a>';
+                $content .= '</div>';
+            }
+        }
+        
+        $content .= '</div>';
+        
+        // Add JavaScript for section tracking
+        $content .= $this->getLessonTrackingScript();
         
         return $content;
     }
@@ -89,10 +198,36 @@ class ELearning_Frontend {
      * Render quiz interface - ALWAYS starts fresh
      */
     private function renderQuizInterface($quiz_id, $questions, $passing_score, $min_questions, $show_results) {
+        // Check if user has already passed this quiz
+        $user_session = ELearning_Database::getOrCreateUserSession();
+        $previous_attempts = ELearning_Database::getUserQuizAttempts($user_session, $quiz_id);
+        $has_passed = false;
+        
+        foreach ($previous_attempts as $attempt) {
+            if ($attempt['passed'] == 1) {
+                $has_passed = true;
+                break;
+            }
+        }
+        
+        // Show passed state if user has already passed
+        if ($has_passed) {
+            $html = '<div class="elearning-quiz-passed">';
+            $html .= '<div class="quiz-success-icon">🎉</div>';
+            $html .= '<h3>' . __('Congratulations!', 'elearning-quiz') . '</h3>';
+            $html .= '<p>' . __('You have already passed this quiz.', 'elearning-quiz') . '</p>';
+            $html .= '<div class="quiz-stats">';
+            $html .= '<p>' . sprintf(__('Your best score: %.1f%%', 'elearning-quiz'), $this->getBestScore($previous_attempts)) . '</p>';
+            $html .= '<p>' . sprintf(__('Total attempts: %d', 'elearning-quiz'), count($previous_attempts)) . '</p>';
+            $html .= '</div>';
+            $html .= '<button type="button" class="retake-quiz-btn" data-quiz-id="' . esc_attr($quiz_id) . '">' . __('Retake Quiz', 'elearning-quiz') . '</button>';
+            $html .= '</div>';
+        }
+        
         // Select questions for this attempt
         $selected_questions = $this->selectQuizQuestions($quiz_id, $questions, $min_questions);
         
-        $html = '<div class="elearning-quiz-intro">';
+        $html .= '<div class="elearning-quiz-intro" ' . ($has_passed ? 'style="display:none;"' : '') . '>';
         $html .= '<div class="quiz-info">';
         $html .= '<div class="quiz-stat"><span class="label">' . __('Questions:', 'elearning-quiz') . '</span> <span class="value">' . count($selected_questions) . '</span></div>';
         $html .= '<div class="quiz-stat"><span class="label">' . __('Passing Score:', 'elearning-quiz') . '</span> <span class="value">' . $passing_score . '%</span></div>';
@@ -378,4 +513,128 @@ class ELearning_Frontend {
         </div>
         <?php
     }
+    
+    /**
+     * Get best score from attempts
+     */
+    private function getBestScore($attempts) {
+        $best_score = 0;
+        foreach ($attempts as $attempt) {
+            if ($attempt['score'] > $best_score) {
+                $best_score = $attempt['score'];
+            }
+        }
+                
+        return $best_score;
+    }
+    
+    /**
+     * Get lesson tracking script
+     */
+    private function getLessonTrackingScript() {
+        ob_start();
+        ?>
+        <script>
+        jQuery(document).ready(function($) {
+            // Track section scroll completion
+            let sectionTimers = {};
+            let sectionScrollTracking = {};
+            
+            $('.section-content').each(function() {
+                const $section = $(this);
+                const sectionIndex = $section.data('section-index');
+                
+                // Initialize tracking
+                sectionTimers[sectionIndex] = Date.now();
+                sectionScrollTracking[sectionIndex] = false;
+                
+                // Track scroll completion
+                $section.on('scroll', function() {
+                    const scrollPercentage = ($section.scrollTop() + $section.height()) / $section[0].scrollHeight * 100;
+                    
+                    if (scrollPercentage >= 90 && !sectionScrollTracking[sectionIndex]) {
+                        sectionScrollTracking[sectionIndex] = true;
+                        console.log('Section ' + sectionIndex + ' scroll completed');
+                    }
+                });
+            });
+            
+            // Mark section as complete
+            $('.mark-complete-btn').on('click', function() {
+                const $button = $(this);
+                const sectionIndex = $button.data('section-index');
+                const lessonId = $('.elearning-lesson-container').data('lesson-id');
+                
+                $button.prop('disabled', true).text('<?php echo esc_js(__('Marking Complete...', 'elearning-quiz')); ?>');
+                
+                // Calculate time spent
+                const timeSpent = Math.round((Date.now() - sectionTimers[sectionIndex]) / 1000);
+                
+                $.ajax({
+                    url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                    type: 'POST',
+                    data: {
+                        action: 'elearning_update_lesson_progress',
+                        lesson_id: lessonId,
+                        section_index: sectionIndex,
+                        completed: true,
+                        time_spent: timeSpent,
+                        scroll_percentage: sectionScrollTracking[sectionIndex] ? 100 : 0,
+                        nonce: '<?php echo wp_create_nonce('elearning_quiz_nonce'); ?>'
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            // Update UI
+                            const $section = $button.closest('.lesson-section');
+                            $section.addClass('completed');
+                            $section.find('.section-title').prepend('<span class="completion-icon">✓</span> ');
+                            $button.parent().remove();
+                            
+                            // Unlock next section
+                            const $nextSection = $section.next('.lesson-section');
+                            if ($nextSection.length && $nextSection.hasClass('locked')) {
+                                $nextSection.removeClass('locked');
+                                $nextSection.find('.lock-icon').remove();
+                                $nextSection.find('.section-locked-message').remove();
+                                // Load content for next section if needed
+                                location.reload(); // Simple reload for now
+                            }
+                            
+                            // Update progress bar
+                            updateProgressBar();
+                        } else {
+                            alert(response.data || '<?php echo esc_js(__('Error updating progress', 'elearning-quiz')); ?>');
+                            $button.prop('disabled', false).text('<?php echo esc_js(__('Mark as Complete', 'elearning-quiz')); ?>');
+                        }
+                    },
+                    error: function() {
+                        alert('<?php echo esc_js(__('Error updating progress', 'elearning-quiz')); ?>');
+                        $button.prop('disabled', false).text('<?php echo esc_js(__('Mark as Complete', 'elearning-quiz')); ?>');
+                    }
+                });
+            });
+            
+            function updateProgressBar() {
+                const totalSections = $('.lesson-section').length;
+                const completedSections = $('.lesson-section.completed').length;
+                const percentage = (completedSections / totalSections) * 100;
+                
+                $('.lesson-progress-overview .progress-fill').css('width', percentage + '%');
+                $('.lesson-progress-overview .progress-text').text(
+                    '<?php echo esc_js(__('%d of %d sections completed', 'elearning-quiz')); ?>'
+                        .replace('%d', completedSections)
+                        .replace('%d', totalSections)
+                );
+                
+                // Show quiz prompt if all sections completed
+                if (completedSections === totalSections) {
+                    $('.lesson-quiz-prompt').slideDown();
+                }
+            }
+        });
+        </script>
+        <?php
+        return ob_get_clean();
+    }
+}
 }
