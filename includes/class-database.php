@@ -3,6 +3,7 @@
  * Database Class
  * 
  * Handles custom database tables creation and management
+ * Simplified version focused on essential functionality
  */
 
 if (!defined('ABSPATH')) {
@@ -35,13 +36,14 @@ class ELearning_Database {
         
         $charset_collate = $wpdb->get_charset_collate();
         
-        // Quiz attempts table
+        // Quiz attempts table - Core functionality
         $table_name = $wpdb->prefix . 'elearning_quiz_attempts';
         $sql = "CREATE TABLE $table_name (
             id bigint(20) NOT NULL AUTO_INCREMENT,
             attempt_id varchar(20) NOT NULL,
             quiz_id bigint(20) NOT NULL,
             user_session varchar(255) DEFAULT NULL,
+            language varchar(5) DEFAULT 'en',
             start_time datetime NOT NULL,
             end_time datetime DEFAULT NULL,
             status enum('started', 'completed', 'abandoned') DEFAULT 'started',
@@ -49,22 +51,22 @@ class ELearning_Database {
             total_questions int(11) DEFAULT NULL,
             correct_answers int(11) DEFAULT NULL,
             passed tinyint(1) DEFAULT 0,
-            ip_address varchar(45) DEFAULT NULL,
-            user_agent text DEFAULT NULL,
+            questions_shown text DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             UNIQUE KEY attempt_id (attempt_id),
             KEY quiz_id (quiz_id),
+            KEY user_session (user_session),
             KEY status (status),
-            KEY start_time (start_time),
+            KEY language (language),
             KEY passed (passed)
         ) $charset_collate;";
         
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
         dbDelta($sql);
         
-        // Quiz answers table (detailed answer tracking)
+        // Quiz answers table - Detailed answer tracking
         $table_name = $wpdb->prefix . 'elearning_quiz_answers';
         $sql = "CREATE TABLE $table_name (
             id bigint(20) NOT NULL AUTO_INCREMENT,
@@ -75,7 +77,6 @@ class ELearning_Database {
             user_answer text DEFAULT NULL,
             correct_answer text DEFAULT NULL,
             is_correct tinyint(1) DEFAULT 0,
-            time_spent int(11) DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             KEY attempt_id (attempt_id),
@@ -93,8 +94,9 @@ class ELearning_Database {
             user_session varchar(255) NOT NULL,
             section_index int(11) NOT NULL,
             completed tinyint(1) DEFAULT 0,
+            scroll_completed tinyint(1) DEFAULT 0,
+            button_completed tinyint(1) DEFAULT 0,
             time_spent int(11) DEFAULT NULL,
-            scroll_percentage decimal(5,2) DEFAULT NULL,
             completed_at datetime DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -103,70 +105,6 @@ class ELearning_Database {
             KEY lesson_id (lesson_id),
             KEY user_session (user_session),
             KEY completed (completed)
-        ) $charset_collate;";
-        
-        dbDelta($sql);
-        
-        // Quiz question bank table (for randomization)
-        $table_name = $wpdb->prefix . 'elearning_quiz_question_usage';
-        $sql = "CREATE TABLE $table_name (
-            id bigint(20) NOT NULL AUTO_INCREMENT,
-            attempt_id varchar(20) NOT NULL,
-            quiz_id bigint(20) NOT NULL,
-            question_index int(11) NOT NULL,
-            question_order int(11) NOT NULL,
-            shown tinyint(1) DEFAULT 1,
-            created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (id),
-            KEY attempt_id (attempt_id),
-            KEY quiz_id (quiz_id),
-            KEY question_index (question_index)
-        ) $charset_collate;";
-        
-        dbDelta($sql);
-        
-        // Analytics summary table (for performance)
-        $table_name = $wpdb->prefix . 'elearning_analytics_summary';
-        $sql = "CREATE TABLE $table_name (
-            id bigint(20) NOT NULL AUTO_INCREMENT,
-            quiz_id bigint(20) NOT NULL,
-            date_calculated date NOT NULL,
-            total_attempts int(11) DEFAULT 0,
-            total_completed int(11) DEFAULT 0,
-            total_passed int(11) DEFAULT 0,
-            total_failed int(11) DEFAULT 0,
-            average_score decimal(5,2) DEFAULT NULL,
-            highest_score decimal(5,2) DEFAULT NULL,
-            lowest_score decimal(5,2) DEFAULT NULL,
-            average_time_minutes decimal(8,2) DEFAULT NULL,
-            created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (id),
-            UNIQUE KEY quiz_date (quiz_id, date_calculated),
-            KEY quiz_id (quiz_id),
-            KEY date_calculated (date_calculated)
-        ) $charset_collate;";
-        
-        dbDelta($sql);
-        
-        // User session tracking (GDPR compliant - no personal data)
-        $table_name = $wpdb->prefix . 'elearning_user_sessions';
-        $sql = "CREATE TABLE $table_name (
-            id bigint(20) NOT NULL AUTO_INCREMENT,
-            session_id varchar(255) NOT NULL,
-            session_hash varchar(64) NOT NULL,
-            first_visit datetime NOT NULL,
-            last_activity datetime NOT NULL,
-            total_lessons_started int(11) DEFAULT 0,
-            total_lessons_completed int(11) DEFAULT 0,
-            total_quizzes_attempted int(11) DEFAULT 0,
-            total_quizzes_passed int(11) DEFAULT 0,
-            created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (id),
-            UNIQUE KEY session_id (session_id),
-            KEY session_hash (session_hash),
-            KEY last_activity (last_activity)
         ) $charset_collate;";
         
         dbDelta($sql);
@@ -181,10 +119,7 @@ class ELearning_Database {
         $tables = [
             $wpdb->prefix . 'elearning_quiz_attempts',
             $wpdb->prefix . 'elearning_quiz_answers',
-            $wpdb->prefix . 'elearning_lesson_progress',
-            $wpdb->prefix . 'elearning_quiz_question_usage',
-            $wpdb->prefix . 'elearning_analytics_summary',
-            $wpdb->prefix . 'elearning_user_sessions'
+            $wpdb->prefix . 'elearning_lesson_progress'
         ];
         
         foreach ($tables as $table) {
@@ -213,42 +148,19 @@ class ELearning_Database {
      * Get or create user session
      */
     public static function getOrCreateUserSession(): string {
-        if (!session_id()) {
+        // Start session if not already started
+        if (session_status() === PHP_SESSION_NONE) {
             session_start();
         }
         
-        $session_id = session_id();
-        
-        if (empty($session_id)) {
-            $session_id = wp_generate_password(32, false, false);
-            session_id($session_id);
+        // Check if we already have a session ID
+        if (!empty($_SESSION['elearning_user_id'])) {
+            return $_SESSION['elearning_user_id'];
         }
         
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'elearning_user_sessions';
-        
-        // Check if session exists
-        $existing_session = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM $table_name WHERE session_id = %s",
-            $session_id
-        ));
-        
-        if (!$existing_session) {
-            // Create new session record
-            $wpdb->insert($table_name, [
-                'session_id' => $session_id,
-                'session_hash' => hash('sha256', $session_id . wp_salt()),
-                'first_visit' => current_time('mysql'),
-                'last_activity' => current_time('mysql')
-            ]);
-        } else {
-            // Update last activity
-            $wpdb->update(
-                $table_name,
-                ['last_activity' => current_time('mysql')],
-                ['session_id' => $session_id]
-            );
-        }
+        // Generate new session ID
+        $session_id = 'user_' . wp_generate_password(16, false, false) . '_' . time();
+        $_SESSION['elearning_user_id'] = $session_id;
         
         return $session_id;
     }
@@ -256,11 +168,12 @@ class ELearning_Database {
     /**
      * Start a new quiz attempt
      */
-    public static function startQuizAttempt($quiz_id): string {
+    public static function startQuizAttempt($quiz_id, $questions_shown = []): string {
         global $wpdb;
         
         $attempt_id = self::generateAttemptId();
         $user_session = self::getOrCreateUserSession();
+        $language = self::getCurrentLanguage();
         
         $table_name = $wpdb->prefix . 'elearning_quiz_attempts';
         
@@ -268,10 +181,10 @@ class ELearning_Database {
             'attempt_id' => $attempt_id,
             'quiz_id' => $quiz_id,
             'user_session' => $user_session,
+            'language' => $language,
             'start_time' => current_time('mysql'),
             'status' => 'started',
-            'ip_address' => self::getAnonymizedIp(),
-            'user_agent' => substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500)
+            'questions_shown' => wp_json_encode($questions_shown)
         ]);
         
         if ($result === false) {
@@ -303,18 +216,13 @@ class ELearning_Database {
             ['attempt_id' => $attempt_id]
         );
         
-        // Update user session stats
-        if ($result !== false) {
-            self::updateUserSessionStats($attempt_id, $passed);
-        }
-        
         return $result !== false;
     }
     
     /**
      * Save quiz answer
      */
-    public static function saveQuizAnswer($attempt_id, $question_index, $question_type, $question_text, $user_answer, $correct_answer, $is_correct, $time_spent = null): bool {
+    public static function saveQuizAnswer($attempt_id, $question_index, $question_type, $question_text, $user_answer, $correct_answer, $is_correct): bool {
         global $wpdb;
         
         $table_name = $wpdb->prefix . 'elearning_quiz_answers';
@@ -334,8 +242,7 @@ class ELearning_Database {
             'question_text' => wp_strip_all_tags($question_text),
             'user_answer' => $user_answer,
             'correct_answer' => $correct_answer,
-            'is_correct' => $is_correct ? 1 : 0,
-            'time_spent' => $time_spent
+            'is_correct' => $is_correct ? 1 : 0
         ]);
         
         return $result !== false;
@@ -344,7 +251,7 @@ class ELearning_Database {
     /**
      * Update lesson progress
      */
-    public static function updateLessonProgress($lesson_id, $section_index, $completed = false, $time_spent = null, $scroll_percentage = null): bool {
+    public static function updateLessonProgress($lesson_id, $section_index, $completed = false, $scroll_completed = false, $button_completed = false, $time_spent = null): bool {
         global $wpdb;
         
         $user_session = self::getOrCreateUserSession();
@@ -358,10 +265,12 @@ class ELearning_Database {
         
         $data = [
             'time_spent' => $time_spent,
-            'scroll_percentage' => $scroll_percentage
+            'scroll_completed' => $scroll_completed ? 1 : 0,
+            'button_completed' => $button_completed ? 1 : 0
         ];
         
-        if ($completed) {
+        // Mark as completed if both scroll and button are completed
+        if ($scroll_completed && $button_completed) {
             $data['completed'] = 1;
             $data['completed_at'] = current_time('mysql');
         }
@@ -383,10 +292,10 @@ class ELearning_Database {
                 'lesson_id' => $lesson_id,
                 'user_session' => $user_session,
                 'section_index' => $section_index,
-                'completed' => $completed ? 1 : 0
+                'completed' => ($scroll_completed && $button_completed) ? 1 : 0
             ]);
             
-            if ($completed) {
+            if ($scroll_completed && $button_completed) {
                 $data['completed_at'] = current_time('mysql');
             }
             
@@ -417,41 +326,33 @@ class ELearning_Database {
     }
     
     /**
-     * Track question usage for randomization
-     */
-    public static function trackQuestionUsage($attempt_id, $quiz_id, $question_index, $question_order): bool {
-        global $wpdb;
-        
-        $table_name = $wpdb->prefix . 'elearning_quiz_question_usage';
-        
-        $result = $wpdb->insert($table_name, [
-            'attempt_id' => $attempt_id,
-            'quiz_id' => $quiz_id,
-            'question_index' => $question_index,
-            'question_order' => $question_order
-        ]);
-        
-        return $result !== false;
-    }
-    
-    /**
      * Get previously used questions for a user session
      */
-    public static function getPreviouslyUsedQuestions($quiz_id, $user_session): array {
+    public static function getPreviouslyUsedQuestions($quiz_id, $user_session = null): array {
         global $wpdb;
         
+        if (!$user_session) {
+            $user_session = self::getOrCreateUserSession();
+        }
+        
         $attempts_table = $wpdb->prefix . 'elearning_quiz_attempts';
-        $usage_table = $wpdb->prefix . 'elearning_quiz_question_usage';
         
         $results = $wpdb->get_results($wpdb->prepare(
-            "SELECT DISTINCT u.question_index 
-             FROM $usage_table u 
-             INNER JOIN $attempts_table a ON u.attempt_id = a.attempt_id 
-             WHERE u.quiz_id = %d AND a.user_session = %s",
+            "SELECT questions_shown FROM $attempts_table 
+             WHERE quiz_id = %d AND user_session = %s AND status = 'completed'
+             ORDER BY created_at DESC",
             $quiz_id, $user_session
         ), ARRAY_A);
         
-        return array_column($results, 'question_index');
+        $used_questions = [];
+        foreach ($results as $row) {
+            $questions = json_decode($row['questions_shown'], true);
+            if (is_array($questions)) {
+                $used_questions = array_merge($used_questions, $questions);
+            }
+        }
+        
+        return array_unique($used_questions);
     }
     
     /**
@@ -471,7 +372,8 @@ class ELearning_Database {
                 AVG(CASE WHEN status = 'completed' THEN score END) as average_score,
                 MAX(score) as highest_score,
                 MIN(CASE WHEN status = 'completed' THEN score END) as lowest_score,
-                AVG(CASE WHEN status = 'completed' THEN TIMESTAMPDIFF(MINUTE, start_time, end_time) END) as average_time_minutes
+                COUNT(CASE WHEN language = 'en' THEN 1 END) as english_attempts,
+                COUNT(CASE WHEN language = 'gr' THEN 1 END) as greek_attempts
              FROM $table_name 
              WHERE quiz_id = %d",
             $quiz_id
@@ -487,16 +389,17 @@ class ELearning_Database {
         global $wpdb;
         
         $attempts_table = $wpdb->prefix . 'elearning_quiz_attempts';
-        $sessions_table = $wpdb->prefix . 'elearning_user_sessions';
         
         $stats = $wpdb->get_row(
             "SELECT 
-                (SELECT COUNT(*) FROM $attempts_table) as total_quiz_attempts,
-                (SELECT COUNT(*) FROM $attempts_table WHERE status = 'completed') as completed_quiz_attempts,
-                (SELECT COUNT(*) FROM $attempts_table WHERE passed = 1) as passed_quiz_attempts,
-                (SELECT COUNT(*) FROM $sessions_table) as total_unique_sessions,
-                (SELECT AVG(score) FROM $attempts_table WHERE status = 'completed') as global_average_score
-            ",
+                COUNT(*) as total_quiz_attempts,
+                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_quiz_attempts,
+                COUNT(CASE WHEN passed = 1 THEN 1 END) as passed_quiz_attempts,
+                COUNT(DISTINCT user_session) as unique_users,
+                AVG(CASE WHEN status = 'completed' THEN score END) as global_average_score,
+                COUNT(CASE WHEN language = 'en' THEN 1 END) as english_total,
+                COUNT(CASE WHEN language = 'gr' THEN 1 END) as greek_total
+             FROM $attempts_table",
             ARRAY_A
         );
         
@@ -504,38 +407,7 @@ class ELearning_Database {
     }
     
     /**
-     * Get most popular quizzes
-     */
-    public static function getMostPopularQuizzes($limit = 10): array {
-        global $wpdb;
-        
-        $table_name = $wpdb->prefix . 'elearning_quiz_attempts';
-        
-        $results = $wpdb->get_results($wpdb->prepare(
-            "SELECT 
-                quiz_id,
-                COUNT(*) as attempt_count,
-                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completion_count,
-                COUNT(CASE WHEN passed = 1 THEN 1 END) as pass_count,
-                AVG(CASE WHEN status = 'completed' THEN score END) as average_score
-             FROM $table_name 
-             GROUP BY quiz_id 
-             ORDER BY attempt_count DESC 
-             LIMIT %d",
-            $limit
-        ), ARRAY_A);
-        
-        // Get quiz titles
-        foreach ($results as &$result) {
-            $quiz = get_post($result['quiz_id']);
-            $result['quiz_title'] = $quiz ? $quiz->post_title : __('Unknown Quiz', 'elearning-quiz');
-        }
-        
-        return $results;
-    }
-    
-    /**
-     * Get quiz attempts by user session
+     * Get user quiz attempts
      */
     public static function getUserQuizAttempts($user_session, $quiz_id = null): array {
         global $wpdb;
@@ -560,10 +432,17 @@ class ELearning_Database {
     /**
      * Clean up old data (GDPR compliance)
      */
-    public static function cleanupOldData($days = 365): int {
+    public static function cleanupOldData(): int {
         global $wpdb;
         
-        $cutoff_date = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+        $settings = get_option('elearning_quiz_settings', []);
+        $retention_days = $settings['data_retention_days'] ?? 365;
+        
+        if ($retention_days <= 0) {
+            return 0; // Don't delete if set to 0 or negative
+        }
+        
+        $cutoff_date = date('Y-m-d H:i:s', strtotime("-{$retention_days} days"));
         $total_deleted = 0;
         
         // Clean up quiz attempts
@@ -590,125 +469,25 @@ class ELearning_Database {
         ));
         $total_deleted += $deleted;
         
-        // Clean up question usage
-        $usage_table = $wpdb->prefix . 'elearning_quiz_question_usage';
-        $deleted = $wpdb->query($wpdb->prepare(
-            "DELETE FROM $usage_table WHERE created_at < %s",
-            $cutoff_date
-        ));
-        $total_deleted += $deleted;
-        
-        // Clean up inactive user sessions
-        $sessions_table = $wpdb->prefix . 'elearning_user_sessions';
-        $deleted = $wpdb->query($wpdb->prepare(
-            "DELETE FROM $sessions_table WHERE last_activity < %s",
-            $cutoff_date
-        ));
-        $total_deleted += $deleted;
-        
         return $total_deleted;
     }
     
     /**
-     * Update analytics summary (run daily via cron)
+     * Get current language for WPML compatibility
      */
-    public static function updateAnalyticsSummary(): void {
-        global $wpdb;
-        
-        $attempts_table = $wpdb->prefix . 'elearning_quiz_attempts';
-        $summary_table = $wpdb->prefix . 'elearning_analytics_summary';
-        $today = current_time('Y-m-d');
-        
-        // Get all quiz IDs that have attempts
-        $quiz_ids = $wpdb->get_col(
-            "SELECT DISTINCT quiz_id FROM $attempts_table WHERE DATE(start_time) = '$today'"
-        );
-        
-        foreach ($quiz_ids as $quiz_id) {
-            $stats = self::getQuizStatistics($quiz_id);
-            
-            // Insert or update summary
-            $wpdb->query($wpdb->prepare(
-                "INSERT INTO $summary_table 
-                (quiz_id, date_calculated, total_attempts, total_completed, total_passed, total_failed, 
-                 average_score, highest_score, lowest_score, average_time_minutes)
-                VALUES (%d, %s, %d, %d, %d, %d, %f, %f, %f, %f)
-                ON DUPLICATE KEY UPDATE
-                total_attempts = VALUES(total_attempts),
-                total_completed = VALUES(total_completed),
-                total_passed = VALUES(total_passed),
-                total_failed = VALUES(total_failed),
-                average_score = VALUES(average_score),
-                highest_score = VALUES(highest_score),
-                lowest_score = VALUES(lowest_score),
-                average_time_minutes = VALUES(average_time_minutes)",
-                $quiz_id,
-                $today,
-                $stats['total_attempts'] ?? 0,
-                $stats['completed_attempts'] ?? 0,
-                $stats['passed_attempts'] ?? 0,
-                $stats['failed_attempts'] ?? 0,
-                $stats['average_score'] ?? 0,
-                $stats['highest_score'] ?? 0,
-                $stats['lowest_score'] ?? 0,
-                $stats['average_time_minutes'] ?? 0
-            ));
-        }
-    }
-    
-    /**
-     * Update user session statistics
-     */
-    private static function updateUserSessionStats($attempt_id, $passed): void {
-        global $wpdb;
-        
-        $attempts_table = $wpdb->prefix . 'elearning_quiz_attempts';
-        $sessions_table = $wpdb->prefix . 'elearning_user_sessions';
-        
-        // Get user session from attempt
-        $user_session = $wpdb->get_var($wpdb->prepare(
-            "SELECT user_session FROM $attempts_table WHERE attempt_id = %s",
-            $attempt_id
-        ));
-        
-        if ($user_session) {
-            // Update session stats
-            $wpdb->query($wpdb->prepare(
-                "UPDATE $sessions_table SET 
-                total_quizzes_attempted = total_quizzes_attempted + 1,
-                total_quizzes_passed = total_quizzes_passed + %d
-                WHERE session_id = %s",
-                $passed ? 1 : 0,
-                $user_session
-            ));
-        }
-    }
-    
-    /**
-     * Get anonymized IP address (GDPR compliant)
-     */
-    private static function getAnonymizedIp(): string {
-        $ip = $_SERVER['REMOTE_ADDR'] ?? '';
-        
-        if (empty($ip)) {
-            return '';
+    private static function getCurrentLanguage(): string {
+        // Check for WPML
+        if (function_exists('icl_get_current_language')) {
+            return icl_get_current_language();
         }
         
-        // Anonymize IPv4
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            $parts = explode('.', $ip);
-            $parts[3] = '0'; // Remove last octet
-            return implode('.', $parts);
+        // Fallback to WordPress locale
+        $locale = get_locale();
+        if (strpos($locale, 'el') === 0) {
+            return 'gr';
         }
         
-        // Anonymize IPv6
-        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-            $parts = explode(':', $ip);
-            // Keep only first 4 groups (64 bits)
-            return implode(':', array_slice($parts, 0, 4)) . '::';
-        }
-        
-        return '';
+        return 'en';
     }
     
     /**
@@ -718,7 +497,6 @@ class ELearning_Database {
         global $wpdb;
         
         $attempts_table = $wpdb->prefix . 'elearning_quiz_attempts';
-        $answers_table = $wpdb->prefix . 'elearning_quiz_answers';
         
         $where_clause = "WHERE a.quiz_id = %d";
         $params = [$quiz_id];
@@ -735,6 +513,7 @@ class ELearning_Database {
         
         $sql = "SELECT 
                     a.attempt_id,
+                    a.language,
                     a.start_time,
                     a.end_time,
                     a.status,

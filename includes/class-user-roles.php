@@ -2,7 +2,8 @@
 /**
  * User Roles Class
  * 
- * Handles custom user roles and capabilities for the e-learning system
+ * Simplified user roles and capabilities for the e-learning system
+ * Focus on essential roles: Administrator, Content Editor, and standard WordPress roles
  */
 
 if (!defined('ABSPATH')) {
@@ -29,12 +30,12 @@ class ELearning_User_Roles {
             
             // Custom lesson capabilities
             'edit_elearning_lessons' => true,
-            'edit_others_elearning_lessons' => true,
+            'edit_others_elearning_lessons' => false, // Can only edit own lessons
             'edit_published_elearning_lessons' => true,
             'edit_private_elearning_lessons' => true,
             'publish_elearning_lessons' => true,
             'read_elearning_lessons' => true,
-            'read_private_elearning_lessons' => true,
+            'read_private_elearning_lessons' => false,
             'delete_elearning_lessons' => true,
             'delete_others_elearning_lessons' => false,
             'delete_published_elearning_lessons' => true,
@@ -42,85 +43,20 @@ class ELearning_User_Roles {
             
             // Custom quiz capabilities
             'edit_elearning_quizzes' => true,
-            'edit_others_elearning_quizzes' => true,
+            'edit_others_elearning_quizzes' => false, // Can only edit own quizzes
             'edit_published_elearning_quizzes' => true,
             'edit_private_elearning_quizzes' => true,
             'publish_elearning_quizzes' => true,
-            'read_elearning_quizzes' => true,
-            'read_private_elearning_quizzes' => true,
-            'delete_elearning_quizzes' => true,
-            'delete_others_elearning_quizzes' => false,
-            'delete_published_elearning_quizzes' => true,
-            'delete_private_elearning_quizzes' => true,
-            
-            // Analytics capabilities (read-only)
-            'view_elearning_analytics' => true,
-            'export_elearning_data' => true,
-            
-            // Taxonomy capabilities
-            'manage_quiz_categories' => true,
-            'manage_lesson_categories' => true,
-            'edit_quiz_categories' => true,
-            'edit_lesson_categories' => true,
-            'delete_quiz_categories' => true,
-            'delete_lesson_categories' => true,
-            'assign_quiz_categories' => true,
-            'assign_lesson_categories' => true,
-        ]);
-        
-        // Quiz Manager role - limited to quiz management only
-        add_role('elearning_quiz_manager', __('Quiz Manager', 'elearning-quiz'), [
-            // Basic WordPress capabilities
-            'read' => true,
-            'upload_files' => true,
-            'edit_files' => false,
-            'unfiltered_html' => false,
-            
-            // Limited lesson capabilities (read-only)
-            'read_elearning_lessons' => true,
-            'read_private_elearning_lessons' => false,
-            
-            // Full quiz capabilities
-            'edit_elearning_quizzes' => true,
-            'edit_others_elearning_quizzes' => false,
-            'edit_published_elearning_quizzes' => true,
-            'edit_private_elearning_quizzes' => true,
-            'publish_elearning_quizzes' => true,
-            'read_elearning_quizzes' => true,
-            'read_private_elearning_quizzes' => true,
-            'delete_elearning_quizzes' => true,
-            'delete_others_elearning_quizzes' => false,
-            'delete_published_elearning_quizzes' => true,
-            'delete_private_elearning_quizzes' => true,
-            
-            // Analytics capabilities (limited)
-            'view_elearning_analytics' => true,
-            'export_elearning_data' => false,
-            
-            // Quiz taxonomy capabilities
-            'manage_quiz_categories' => true,
-            'edit_quiz_categories' => true,
-            'delete_quiz_categories' => false,
-            'assign_quiz_categories' => true,
-        ]);
-        
-        // Analytics Viewer role - read-only access to analytics
-        add_role('elearning_analytics_viewer', __('Analytics Viewer', 'elearning-quiz'), [
-            // Basic WordPress capabilities
-            'read' => true,
-            'upload_files' => false,
-            'edit_files' => false,
-            'unfiltered_html' => false,
-            
-            // Read-only access to lessons and quizzes
-            'read_elearning_lessons' => true,
-            'read_private_elearning_lessons' => false,
             'read_elearning_quizzes' => true,
             'read_private_elearning_quizzes' => false,
+            'delete_elearning_quizzes' => true,
+            'delete_others_elearning_quizzes' => false,
+            'delete_published_elearning_quizzes' => true,
+            'delete_private_elearning_quizzes' => true,
             
-            // Analytics capabilities (read-only)
-            'view_elearning_analytics' => true,
-            'export_elearning_data' => true,
+            // Taxonomy capabilities
+            'assign_quiz_categories' => true,
+            'assign_lesson_categories' => true,
         ]);
     }
     
@@ -129,8 +65,6 @@ class ELearning_User_Roles {
      */
     public static function removeRoles(): void {
         remove_role('elearning_content_editor');
-        remove_role('elearning_quiz_manager');
-        remove_role('elearning_analytics_viewer');
     }
     
     /**
@@ -143,13 +77,13 @@ class ELearning_User_Roles {
             $this->addAllCapabilitiesToRole($admin_role);
         }
         
-        // Editor gets most capabilities except deletion of others' content
+        // Editor gets content management capabilities
         $editor_role = get_role('editor');
         if ($editor_role) {
             $this->addEditorCapabilities($editor_role);
         }
         
-        // Author gets limited capabilities
+        // Author gets limited capabilities for own content
         $author_role = get_role('author');
         if ($author_role) {
             $this->addAuthorCapabilities($author_role);
@@ -157,7 +91,7 @@ class ELearning_User_Roles {
     }
     
     /**
-     * Add all e-learning capabilities to a role
+     * Add all e-learning capabilities to administrator role
      */
     private function addAllCapabilitiesToRole($role): void {
         $capabilities = [
@@ -187,7 +121,7 @@ class ELearning_User_Roles {
             'delete_published_elearning_quizzes',
             'delete_private_elearning_quizzes',
             
-            // Analytics capabilities
+            // Analytics and management capabilities
             'view_elearning_analytics',
             'export_elearning_data',
             'manage_elearning_settings',
@@ -209,11 +143,11 @@ class ELearning_User_Roles {
     }
     
     /**
-     * Add editor-level capabilities
+     * Add editor-level capabilities (can manage all content but not settings)
      */
     private function addEditorCapabilities($role): void {
         $capabilities = [
-            // Lesson capabilities (no deletion of others' content)
+            // Lesson capabilities (can edit others' content)
             'edit_elearning_lessons',
             'edit_others_elearning_lessons',
             'edit_published_elearning_lessons',
@@ -224,8 +158,9 @@ class ELearning_User_Roles {
             'delete_elearning_lessons',
             'delete_published_elearning_lessons',
             'delete_private_elearning_lessons',
+            // Note: No delete_others_elearning_lessons for safety
             
-            // Quiz capabilities (no deletion of others' content)
+            // Quiz capabilities (can edit others' content)
             'edit_elearning_quizzes',
             'edit_others_elearning_quizzes',
             'edit_published_elearning_quizzes',
@@ -236,8 +171,9 @@ class ELearning_User_Roles {
             'delete_elearning_quizzes',
             'delete_published_elearning_quizzes',
             'delete_private_elearning_quizzes',
+            // Note: No delete_others_elearning_quizzes for safety
             
-            // Analytics capabilities (read-only)
+            // Limited analytics (view only)
             'view_elearning_analytics',
             'export_elearning_data',
             
@@ -258,7 +194,7 @@ class ELearning_User_Roles {
     }
     
     /**
-     * Add author-level capabilities
+     * Add author-level capabilities (own content only)
      */
     private function addAuthorCapabilities($role): void {
         $capabilities = [
@@ -277,9 +213,6 @@ class ELearning_User_Roles {
             'read_elearning_quizzes',
             'delete_elearning_quizzes',
             'delete_published_elearning_quizzes',
-            
-            // Limited analytics capabilities
-            'view_elearning_analytics',
             
             // Taxonomy capabilities (assign only)
             'assign_quiz_categories',
@@ -337,43 +270,14 @@ class ELearning_User_Roles {
     }
     
     /**
-     * Filter posts query based on user capabilities
-     */
-    public static function filterPostsQuery($query): void {
-        if (is_admin() && $query->is_main_query()) {
-            $post_type = $query->get('post_type');
-            
-            if (in_array($post_type, ['elearning_lesson', 'elearning_quiz'])) {
-                // If user can't edit others' posts, only show their own
-                if (!current_user_can("edit_others_{$post_type}s")) {
-                    $query->set('author', get_current_user_id());
-                }
-            }
-        }
-    }
-    
-    /**
      * Get role display name
      */
     public static function getRoleDisplayName($role_slug): string {
         $role_names = [
             'elearning_content_editor' => __('Content Editor', 'elearning-quiz'),
-            'elearning_quiz_manager' => __('Quiz Manager', 'elearning-quiz'),
-            'elearning_analytics_viewer' => __('Analytics Viewer', 'elearning-quiz'),
         ];
         
         return $role_names[$role_slug] ?? ucfirst(str_replace('_', ' ', $role_slug));
-    }
-    
-    /**
-     * Get all e-learning related roles
-     */
-    public static function getELearningRoles(): array {
-        return [
-            'elearning_content_editor',
-            'elearning_quiz_manager',
-            'elearning_analytics_viewer'
-        ];
     }
     
     /**
@@ -389,10 +293,12 @@ class ELearning_User_Roles {
             return false;
         }
         
-        $elearning_roles = self::getELearningRoles();
+        $elearning_roles = ['elearning_content_editor'];
         $user_roles = $user->roles;
         
-        return !empty(array_intersect($elearning_roles, $user_roles));
+        return !empty(array_intersect($elearning_roles, $user_roles)) || 
+               in_array('administrator', $user_roles) || 
+               in_array('editor', $user_roles);
     }
     
     /**
@@ -430,13 +336,6 @@ class ELearning_User_Roles {
     }
     
     /**
-     * Initialize capability mapping for post types
-     */
-    public static function initCapabilityMapping(): void {
-        add_filter('map_meta_cap', [__CLASS__, 'mapMetaCaps'], 10, 4);
-    }
-    
-    /**
      * Map meta capabilities for custom post types
      */
     public static function mapMetaCaps($caps, $cap, $user_id, $args): array {
@@ -449,9 +348,8 @@ class ELearning_User_Roles {
             }
             
             $post_type = $post->post_type;
-            $post_type_obj = get_post_type_object($post_type);
             
-            if (!$post_type_obj) {
+            if (!in_array($post_type, ['elearning_lesson', 'elearning_quiz'])) {
                 return $caps;
             }
             
@@ -463,12 +361,15 @@ class ELearning_User_Roles {
                 
                 // Check ownership for certain capabilities
                 if (in_array($cap, ['edit_post', 'delete_post']) && $post->post_author != $user_id) {
-                    $caps[] = $custom_caps[$cap . '_others'] ?? $custom_caps[$cap];
+                    $others_cap = str_replace('_posts', '_others_posts', $cap);
+                    if (isset($custom_caps[$others_cap])) {
+                        $caps[] = $custom_caps[$others_cap];
+                    }
                 }
                 
                 // Check post status
-                if ($post->post_status === 'private') {
-                    $caps[] = $custom_caps['read_private_posts'] ?? $custom_caps[$cap];
+                if ($post->post_status === 'private' && isset($custom_caps['read_private_posts'])) {
+                    $caps[] = $custom_caps['read_private_posts'];
                 }
             }
         }
@@ -476,3 +377,6 @@ class ELearning_User_Roles {
         return $caps;
     }
 }
+
+// Initialize capability mapping
+add_filter('map_meta_cap', ['ELearning_User_Roles', 'mapMetaCaps'], 10, 4);
