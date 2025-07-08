@@ -515,21 +515,68 @@ class ELearning_Admin {
                             <?php endforeach; ?>
                         </select>
                         
+                        <div class="export-options">
+                            <label>
+                                <input type="radio" name="export_type" value="attempts" checked>
+                                <?php _e('Export Quiz Attempts', 'elearning-quiz'); ?>
+                            </label>
+                            <label>
+                                <input type="radio" name="export_type" value="questions">
+                                <?php _e('Export Quiz Questions', 'elearning-quiz'); ?>
+                            </label>
+                        </div>
+                        
                         <button type="button" class="button button-primary" onclick="exportSelectedQuiz()">
                             <?php _e('Export to CSV', 'elearning-quiz'); ?>
                         </button>
                     </div>
                 </div>
                 
-                <!-- Import Section (Placeholder for future) -->
+                <!-- Import Section -->
                 <div class="import-section">
                     <h2><?php _e('Import Quiz Questions', 'elearning-quiz'); ?></h2>
-                    <p><?php _e('Import quiz questions from CSV format. (Feature coming soon)', 'elearning-quiz'); ?></p>
+                    <p><?php _e('Import quiz questions from CSV format.', 'elearning-quiz'); ?></p>
+                    
+                    <div class="import-info">
+                        <h4><?php _e('CSV Format Requirements:', 'elearning-quiz'); ?></h4>
+                        <ul>
+                            <li><?php _e('Column headers (required): Type, Question', 'elearning-quiz'); ?></li>
+                            <li><?php _e('Multiple Choice: Option 1-5, Correct Answer(s)', 'elearning-quiz'); ?></li>
+                            <li><?php _e('True/False: Correct Answer (true/false)', 'elearning-quiz'); ?></li>
+                            <li><?php _e('Fill in Blanks: Text with Blanks (use {{blank}}), Word Bank', 'elearning-quiz'); ?></li>
+                            <li><?php _e('Matching: Left 1-5, Right 1-5, Matches (format: 1-2,2-1)', 'elearning-quiz'); ?></li>
+                        </ul>
+                        
+                        <a href="<?php echo ELEARNING_QUIZ_PLUGIN_URL; ?>templates/quiz-import-template.csv" download class="button button-secondary">
+                            <?php _e('Download Sample CSV', 'elearning-quiz'); ?>
+                        </a>
+                    </div>
                     
                     <div class="import-form">
-                        <input type="file" id="import-file" accept=".csv" disabled>
-                        <button type="button" class="button" disabled>
-                            <?php _e('Import from CSV (Coming Soon)', 'elearning-quiz'); ?>
+                        <p><?php _e('To import questions, edit a quiz and use the Import Questions button.', 'elearning-quiz'); ?></p>
+                        <a href="<?php echo admin_url('edit.php?post_type=elearning_quiz'); ?>" class="button">
+                            <?php _e('Go to Quizzes', 'elearning-quiz'); ?>
+                        </a>
+                    </div>
+                </div>
+                
+                <!-- Bulk Operations Section -->
+                <div class="bulk-section">
+                    <h2><?php _e('Bulk Operations', 'elearning-quiz'); ?></h2>
+                    
+                    <div class="bulk-export">
+                        <h3><?php _e('Export All Data', 'elearning-quiz'); ?></h3>
+                        <p><?php _e('Export all quiz attempts from all quizzes.', 'elearning-quiz'); ?></p>
+                        <button type="button" class="button" onclick="exportAllData()">
+                            <?php _e('Export All Attempts', 'elearning-quiz'); ?>
+                        </button>
+                    </div>
+                    
+                    <div class="bulk-cleanup">
+                        <h3><?php _e('Data Cleanup', 'elearning-quiz'); ?></h3>
+                        <p><?php _e('Remove abandoned quiz attempts older than 7 days.', 'elearning-quiz'); ?></p>
+                        <button type="button" class="button" onclick="cleanupAbandonedAttempts()">
+                            <?php _e('Cleanup Abandoned Attempts', 'elearning-quiz'); ?>
                         </button>
                     </div>
                 </div>
@@ -540,14 +587,47 @@ class ELearning_Admin {
         function exportSelectedQuiz() {
             const select = document.getElementById('export-quiz-select');
             const quizId = select.value;
+            const exportType = document.querySelector('input[name="export_type"]:checked').value;
             
             if (!quizId) {
                 alert('<?php _e('Please select a quiz to export.', 'elearning-quiz'); ?>');
                 return;
             }
             
-            const url = ajaxurl + '?action=elearning_export_quiz_data&quiz_id=' + quizId + '&nonce=' + '<?php echo wp_create_nonce('elearning_export_nonce'); ?>';
+            let url;
+            if (exportType === 'questions') {
+                url = ajaxurl + '?action=elearning_export_questions&quiz_id=' + quizId + '&nonce=' + '<?php echo wp_create_nonce('elearning_export_nonce'); ?>';
+            } else {
+                url = ajaxurl + '?action=elearning_export_quiz_data&quiz_id=' + quizId + '&nonce=' + '<?php echo wp_create_nonce('elearning_export_nonce'); ?>';
+            }
+            
             window.open(url, '_blank');
+        }
+        
+        function exportAllData() {
+            if (!confirm('<?php _e('This will export all quiz attempts. Continue?', 'elearning-quiz'); ?>')) {
+                return;
+            }
+            
+            const url = ajaxurl + '?action=elearning_export_quiz_data&export_all=1&nonce=' + '<?php echo wp_create_nonce('elearning_export_nonce'); ?>';
+            window.open(url, '_blank');
+        }
+        
+        function cleanupAbandonedAttempts() {
+            if (!confirm('<?php _e('This will remove all abandoned attempts older than 7 days. Continue?', 'elearning-quiz'); ?>')) {
+                return;
+            }
+            
+            jQuery.post(ajaxurl, {
+                action: 'elearning_cleanup_abandoned',
+                nonce: '<?php echo wp_create_nonce('elearning_cleanup_nonce'); ?>'
+            }, function(response) {
+                if (response.success) {
+                    alert(response.data.message);
+                } else {
+                    alert(response.data || '<?php _e('Cleanup failed', 'elearning-quiz'); ?>');
+                }
+            });
         }
         </script>
         
@@ -559,7 +639,8 @@ class ELearning_Admin {
         }
         
         .export-section,
-        .import-section {
+        .import-section,
+        .bulk-section {
             background: #fff;
             padding: 20px;
             border: 1px solid #ddd;
@@ -575,6 +656,48 @@ class ELearning_Admin {
         .import-form input[type="file"] {
             margin-right: 10px;
             margin-bottom: 10px;
+        }
+        
+        .export-options {
+            margin: 15px 0;
+        }
+        
+        .export-options label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .import-info {
+            background: #f0f0f1;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        
+        .import-info h4 {
+            margin-top: 0;
+        }
+        
+        .import-info ul {
+            margin-bottom: 15px;
+        }
+        
+        .bulk-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .bulk-export,
+        .bulk-cleanup {
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        
+        .bulk-export h3,
+        .bulk-cleanup h3 {
+            margin-top: 0;
         }
         </style>
         <?php

@@ -1,8 +1,14 @@
 /* E-Learning Quiz System - Frontend JavaScript */
-/* Interactive quiz functionality with accessibility support */
+/* Updated with timer functionality, better error handling, and performance optimizations */
 
 jQuery(document).ready(function($) {
     'use strict';
+    
+    // Check if elearningQuiz is defined
+    if (typeof elearningQuiz === 'undefined') {
+        console.error('E-Learning Quiz: elearningQuiz object not found - Scripts not properly loaded');
+        return;
+    }
     
     console.log('E-Learning Quiz System frontend loaded');
     
@@ -14,7 +20,10 @@ jQuery(document).ready(function($) {
         totalQuestions: 0,
         answers: {},
         startTime: null,
-        questionStartTime: null
+        questionStartTime: null,
+        timeLimit: 0,
+        timerInterval: null,
+        questionTimings: {}
     };
     
     // Initialize quiz functionality
@@ -53,25 +62,29 @@ jQuery(document).ready(function($) {
         
         // Auto-save answers (accessibility feature)
         setInterval(autoSaveProgress, 30000); // Every 30 seconds
+        
+        // Handle page visibility change
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        
+        // Handle page unload
+        window.addEventListener('beforeunload', handlePageUnload);
     }
     
     function handleStartQuiz() {
         console.log('Start quiz button clicked');
-        console.log('elearningQuiz object:', elearningQuiz);
         
         const $btn = $(this);
         const quizId = $btn.data('quiz-id');
         
         if (!quizId) {
             console.error('No quiz ID found');
+            showError(elearningQuiz.strings.error || 'An error occurred');
             return;
         }
         
-        // Check if elearningQuiz is defined
-        if (typeof elearningQuiz === 'undefined') {
-            console.error('elearningQuiz object not found - AJAX will not work');
-            showError('Quiz system not properly initialized');
-            return;
+        // Store original button text
+        if (!$btn.data('original-text')) {
+            $btn.data('original-text', $btn.text());
         }
         
         $btn.prop('disabled', true).text(elearningQuiz.strings.loading || 'Loading...');
@@ -91,6 +104,7 @@ jQuery(document).ready(function($) {
                     currentQuiz.id = quizId;
                     currentQuiz.attemptId = response.data.attempt_id;
                     currentQuiz.totalQuestions = response.data.total_questions;
+                    currentQuiz.timeLimit = response.data.time_limit || 0;
                     currentQuiz.startTime = new Date();
                     
                     // Update form with attempt ID
@@ -102,6 +116,13 @@ jQuery(document).ready(function($) {
                     
                     // Initialize first question
                     showQuestion(0);
+                    
+                    // Start quiz timer if time limit is set
+                    if (currentQuiz.timeLimit > 0) {
+                        startQuizTimer();
+                    }
+                    
+                    // Start question timer
                     startQuestionTimer();
                     
                     // Focus first input for accessibility
@@ -122,20 +143,70 @@ jQuery(document).ready(function($) {
         });
     }
     
+    function startQuizTimer() {
+        if (currentQuiz.timeLimit <= 0) return;
+        
+        const endTime = new Date(currentQuiz.startTime.getTime() + currentQuiz.timeLimit * 60000);
+        
+        // Add timer display
+        if (!$('.quiz-timer').length) {
+            $('.quiz-progress').after('<div class="quiz-timer"><span class="timer-label">' + 
+                (elearningQuiz.strings.time_remaining || 'Time Remaining') + 
+                ':</span> <span class="timer-display">--:--</span></div>');
+        }
+        
+        // Update timer every second
+        currentQuiz.timerInterval = setInterval(function() {
+            const now = new Date();
+            const remaining = Math.max(0, endTime - now);
+            
+            if (remaining <= 0) {
+                clearInterval(currentQuiz.timerInterval);
+                handleTimeUp();
+                return;
+            }
+            
+            const minutes = Math.floor(remaining / 60000);
+            const seconds = Math.floor((remaining % 60000) / 1000);
+            
+            $('.timer-display').text(
+                String(minutes).padStart(2, '0') + ':' + 
+                String(seconds).padStart(2, '0')
+            );
+            
+            // Warning at 1 minute
+            if (remaining <= 60000 && !$('.quiz-timer').hasClass('warning')) {
+                $('.quiz-timer').addClass('warning');
+                announceToScreenReader(elearningQuiz.strings.one_minute_warning || 'One minute remaining');
+            }
+        }, 1000);
+    }
+    
+    function handleTimeUp() {
+        clearInterval(currentQuiz.timerInterval);
+        
+        // Show time up modal
+        const $modal = $('<div class="quiz-modal" id="time-up-modal">' +
+            '<div class="modal-content">' +
+            '<h3>' + (elearningQuiz.strings.time_up || 'Time\'s Up!') + '</h3>' +
+            '<p>' + (elearningQuiz.strings.submitting_quiz || 'Your quiz is being submitted...') + '</p>' +
+            '<div class="loading-spinner"></div>' +
+            '</div></div>');
+        
+        $('body').append($modal);
+        $modal.fadeIn();
+        
+        // Auto-submit quiz
+        saveCurrentAnswer();
+        submitQuizData();
+    }
+    
     function handleRetakeQuiz() {
         $('.elearning-quiz-passed').slideUp();
         $('.elearning-quiz-intro').slideDown();
         
         // Reset quiz state
-        currentQuiz = {
-            id: null,
-            attemptId: null,
-            currentQuestion: 0,
-            totalQuestions: 0,
-            answers: {},
-            startTime: null,
-            questionStartTime: null
-        };
+        resetQuizState();
         
         // Reset form
         $('.elearning-quiz-form')[0].reset();
@@ -147,17 +218,48 @@ jQuery(document).ready(function($) {
         $('.blank-space').empty().removeClass('filled');
         $('.word-item').removeClass('used');
         $('.match-select').val('');
+        $('.drop-zone').each(function() {
+            $(this).html('<span class="drop-placeholder">' + 
+                (elearningQuiz.strings.drop_here || 'Drop here') + '</span>')
+                .removeClass('has-item');
+        });
+        $('.draggable-item').removeClass('used');
+    }
+    
+    function resetQuizState() {
+        // Clear timer
+        if (currentQuiz.timerInterval) {
+            clearInterval(currentQuiz.timerInterval);
+        }
+        
+        currentQuiz = {
+            id: null,
+            attemptId: null,
+            currentQuestion: 0,
+            totalQuestions: 0,
+            answers: {},
+            startTime: null,
+            questionStartTime: null,
+            timeLimit: 0,
+            timerInterval: null,
+            questionTimings: {}
+        };
+        
+        // Remove timer display
+        $('.quiz-timer').remove();
     }
     
     function handlePreviousQuestion() {
         if (currentQuiz.currentQuestion > 0) {
             saveCurrentAnswer();
+            recordQuestionTime();
             showQuestion(currentQuiz.currentQuestion - 1);
         }
     }
     
     function handleNextQuestion() {
         saveCurrentAnswer();
+        recordQuestionTime();
         
         if (currentQuiz.currentQuestion < currentQuiz.totalQuestions - 1) {
             showQuestion(currentQuiz.currentQuestion + 1);
@@ -165,6 +267,24 @@ jQuery(document).ready(function($) {
     }
     
     function handleSubmitQuiz() {
+        // Check if all questions answered
+        const unanswered = [];
+        for (let i = 0; i < currentQuiz.totalQuestions; i++) {
+            if (!currentQuiz.answers.hasOwnProperty(i)) {
+                unanswered.push(i + 1);
+            }
+        }
+        
+        if (unanswered.length > 0) {
+            const message = (elearningQuiz.strings.unanswered_questions || 'You have unanswered questions: ') + 
+                unanswered.join(', ') + '. ' + 
+                (elearningQuiz.strings.submit_anyway || 'Submit anyway?');
+            
+            if (!confirm(message)) {
+                return;
+            }
+        }
+        
         // Show confirmation modal
         $('#quiz-confirmation-modal').fadeIn();
     }
@@ -174,9 +294,15 @@ jQuery(document).ready(function($) {
         $('#quiz-loading-modal').fadeIn();
         
         saveCurrentAnswer();
-        
-        // Calculate question timings
-        const questionTimings = calculateQuestionTimings();
+        recordQuestionTime();
+        submitQuizData();
+    }
+    
+    function submitQuizData() {
+        // Clear timer
+        if (currentQuiz.timerInterval) {
+            clearInterval(currentQuiz.timerInterval);
+        }
         
         // Submit quiz via AJAX
         $.ajax({
@@ -186,11 +312,12 @@ jQuery(document).ready(function($) {
                 action: 'elearning_submit_quiz',
                 attempt_id: currentQuiz.attemptId,
                 answers: JSON.stringify(currentQuiz.answers),
-                question_timings: JSON.stringify(questionTimings),
+                question_timings: JSON.stringify(currentQuiz.questionTimings),
                 nonce: elearningQuiz.nonce
             },
             success: function(response) {
                 $('#quiz-loading-modal').fadeOut();
+                $('#time-up-modal').remove();
                 
                 if (response.success) {
                     displayResults(response.data);
@@ -200,6 +327,7 @@ jQuery(document).ready(function($) {
             },
             error: function() {
                 $('#quiz-loading-modal').fadeOut();
+                $('#time-up-modal').remove();
                 showError(elearningQuiz.strings.error || 'An error occurred');
             }
         });
@@ -217,7 +345,13 @@ jQuery(document).ready(function($) {
         $('.quiz-question').removeClass('active');
         
         // Show current question
-        $('.quiz-question').eq(questionIndex).addClass('active');
+        const $currentQuestion = $('.quiz-question').eq(questionIndex);
+        $currentQuestion.addClass('active');
+        
+        // Randomize answer order if enabled
+        if ($currentQuestion.data('randomize-answers') === 'yes') {
+            randomizeAnswers($currentQuestion);
+        }
         
         // Update progress
         updateProgress();
@@ -232,12 +366,28 @@ jQuery(document).ready(function($) {
         startQuestionTimer();
         
         // Scroll to top
-        $('.quiz-question.active')[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        $currentQuestion[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
         
         // Focus first input for accessibility
         setTimeout(() => {
-            $('.quiz-question.active').find('input:not([type="hidden"]), select').first().focus();
+            $currentQuestion.find('input:not([type="hidden"]), select').first().focus();
         }, 300);
+        
+        // Announce question to screen reader
+        const questionNumber = questionIndex + 1;
+        announceToScreenReader(`Question ${questionNumber} of ${currentQuiz.totalQuestions}`);
+    }
+    
+    function randomizeAnswers($question) {
+        const questionType = $question.data('question-type');
+        
+        if (questionType === 'multiple_choice') {
+            const $container = $question.find('.multiple-choice-options');
+            const $options = $container.find('.option-label');
+            
+            // Shuffle and re-append
+            $options.sort(() => Math.random() - 0.5).appendTo($container);
+        }
     }
     
     function updateProgress() {
@@ -245,6 +395,10 @@ jQuery(document).ready(function($) {
         $('.progress-fill').css('width', percentage + '%');
         $('.progress-text .current').text(currentQuiz.currentQuestion + 1);
         $('.progress-text .total').text(currentQuiz.totalQuestions);
+        
+        // Update progress bar accessibility
+        $('.quiz-progress').attr('aria-valuenow', currentQuiz.currentQuestion + 1)
+                          .attr('aria-valuetext', `Question ${currentQuiz.currentQuestion + 1} of ${currentQuiz.totalQuestions}`);
     }
     
     function updateNavigationButtons() {
@@ -271,15 +425,18 @@ jQuery(document).ready(function($) {
         const questionType = $question.data('question-type');
         
         // Visual feedback
+        if ($(this).is(':radio')) {
+            $question.find('.option-label').removeClass('selected');
+        }
         $(this).closest('.option-label').addClass('selected');
         
         // Auto-advance for single-choice questions (optional UX enhancement)
         if (questionType === 'true_false' || (questionType === 'multiple_choice' && $question.find('input[type="radio"]').length > 0)) {
             setTimeout(() => {
                 if (currentQuiz.currentQuestion < currentQuiz.totalQuestions - 1) {
-                    $('.next-btn').focus().click();
+                    $('.next-btn').click();
                 }
-            }, 1000);
+            }, 800);
         }
     }
     
@@ -290,7 +447,6 @@ jQuery(document).ready(function($) {
         // Visual feedback
         $select.closest('.match-item').addClass('answered');
     }
-    
     
     function saveCurrentAnswer() {
         const $currentQuestion = $('.quiz-question.active');
@@ -369,16 +525,19 @@ jQuery(document).ready(function($) {
                 if (Array.isArray(savedAnswer)) {
                     // Multiple select
                     savedAnswer.forEach(value => {
-                        $question.find(`input[type="checkbox"][value="${value}"]`).prop('checked', true);
+                        $question.find(`input[type="checkbox"][value="${value}"]`).prop('checked', true)
+                            .closest('.option-label').addClass('selected');
                     });
                 } else {
                     // Single select
-                    $question.find(`input[type="radio"][value="${savedAnswer}"]`).prop('checked', true);
+                    $question.find(`input[type="radio"][value="${savedAnswer}"]`).prop('checked', true)
+                        .closest('.option-label').addClass('selected');
                 }
                 break;
                 
             case 'true_false':
-                $question.find(`input[type="radio"][value="${savedAnswer}"]`).prop('checked', true);
+                $question.find(`input[type="radio"][value="${savedAnswer}"]`).prop('checked', true)
+                    .closest('.option-label').addClass('selected');
                 break;
                 
             case 'fill_blanks':
@@ -430,144 +589,116 @@ jQuery(document).ready(function($) {
         currentQuiz.questionStartTime = new Date();
     }
     
-    function calculateQuestionTimings() {
-        // This would track time spent on each question
-        // For now, return empty object - will be enhanced in future versions
-        return {};
+    function recordQuestionTime() {
+        if (!currentQuiz.questionStartTime) return;
+        
+        const timeSpent = Math.round((new Date() - currentQuiz.questionStartTime) / 1000);
+        currentQuiz.questionTimings[currentQuiz.currentQuestion] = timeSpent;
     }
     
     function initializeDragAndDrop() {
+        // Use jQuery UI for better browser compatibility
+        
         // === FILL IN THE BLANKS DRAG & DROP ===
-        // Make word items draggable
-        $(document).on('dragstart', '.word-item', function(e) {
-            if ($(this).hasClass('used')) {
-                e.preventDefault();
-                return false;
+        $('.word-item').draggable({
+            revert: 'invalid',
+            helper: 'clone',
+            cursor: 'move',
+            zIndex: 1000,
+            start: function(event, ui) {
+                if ($(this).hasClass('used')) {
+                    return false;
+                }
+                $(this).addClass('dragging');
+            },
+            stop: function() {
+                $(this).removeClass('dragging');
             }
-            
-            const word = $(this).data('word');
-            e.originalEvent.dataTransfer.setData('text/plain', word);
-            e.originalEvent.dataTransfer.setData('application/x-word-item', $(this).index());
-            $(this).addClass('dragging');
         });
         
-        $(document).on('dragend', '.word-item', function() {
-            $(this).removeClass('dragging');
-        });
-        
-        // Make blank spaces droppable
-        $(document).on('dragover', '.blank-space', function(e) {
-            e.preventDefault();
-            $(this).addClass('drop-target');
-        });
-        
-        $(document).on('dragleave', '.blank-space', function() {
-            $(this).removeClass('drop-target');
-        });
-        
-        $(document).on('drop', '.blank-space', function(e) {
-            e.preventDefault();
-            $(this).removeClass('drop-target');
-            
-            const word = e.originalEvent.dataTransfer.getData('text/plain');
-            const blankIndex = $(this).data('blank-index');
-            const $question = $(this).closest('.quiz-question');
-            
-            // Check if word is already used
-            if ($question.find(`.word-item[data-word="${word}"]`).hasClass('used')) {
-                return;
+        $('.blank-space').droppable({
+            accept: '.word-item',
+            hoverClass: 'drop-target',
+            drop: function(event, ui) {
+                const $blank = $(this);
+                const word = ui.draggable.data('word');
+                const blankIndex = $blank.data('blank-index');
+                const $question = $blank.closest('.quiz-question');
+                
+                // Clear previous value if any
+                const previousWord = $blank.text();
+                if (previousWord) {
+                    $question.find(`.word-item[data-word="${previousWord}"]`).removeClass('used');
+                }
+                
+                // Set new value
+                $blank.text(word).addClass('filled');
+                $question.find(`.blank-answer[data-blank-index="${blankIndex}"]`).val(word);
+                
+                // Mark word as used
+                ui.draggable.addClass('used');
+                
+                // Provide feedback
+                announceToScreenReader(`${word} placed in blank ${blankIndex + 1}`);
             }
-            
-            // Clear previous value if any
-            const previousWord = $(this).text();
-            if (previousWord) {
-                $question.find(`.word-item[data-word="${previousWord}"]`).removeClass('used');
-            }
-            
-            // Set new value
-            $(this).text(word).addClass('filled');
-            $question.find(`.blank-answer[data-blank-index="${blankIndex}"]`).val(word);
-            
-            // Mark word as used
-            $question.find(`.word-item[data-word="${word}"]`).addClass('used');
-            
-            // Provide audio feedback for screen readers
-            announceToScreenReader(`${word} placed in blank ${blankIndex + 1}`);
         });
         
         // === MATCHING DRAG & DROP ===
-        // Make matching items draggable
-        $(document).on('dragstart', '.draggable-item', function(e) {
-            if ($(this).hasClass('used')) {
-                e.preventDefault();
-                return false;
+        $('.draggable-item').draggable({
+            revert: 'invalid',
+            helper: 'clone',
+            cursor: 'move',
+            zIndex: 1000,
+            start: function(event, ui) {
+                if ($(this).hasClass('used')) {
+                    return false;
+                }
+                $(this).addClass('dragging');
+            },
+            stop: function() {
+                $(this).removeClass('dragging');
             }
-            
-            const rightIndex = $(this).data('right-index');
-            const itemText = $(this).data('item-text');
-            
-            e.originalEvent.dataTransfer.setData('text/plain', itemText);
-            e.originalEvent.dataTransfer.setData('application/x-right-index', rightIndex);
-            $(this).addClass('dragging');
         });
         
-        $(document).on('dragend', '.draggable-item', function() {
-            $(this).removeClass('dragging');
-        });
-        
-        // Make drop zones droppable
-        $(document).on('dragover', '.drop-zone', function(e) {
-            e.preventDefault();
-            $(this).addClass('drag-over');
-        });
-        
-        $(document).on('dragleave', '.drop-zone', function() {
-            $(this).removeClass('drag-over');
-        });
-        
-        $(document).on('drop', '.drop-zone', function(e) {
-            e.preventDefault();
-            $(this).removeClass('drag-over');
-            
-            const itemText = e.originalEvent.dataTransfer.getData('text/plain');
-            const rightIndex = e.originalEvent.dataTransfer.getData('application/x-right-index');
-            const leftIndex = $(this).data('left-index');
-            const $question = $(this).closest('.quiz-question');
-            
-            // Check if item is already used
-            const $draggableItem = $question.find(`.draggable-item[data-right-index="${rightIndex}"]`);
-            if ($draggableItem.hasClass('used')) {
-                return;
+        $('.drop-zone').droppable({
+            accept: '.draggable-item',
+            hoverClass: 'drag-over',
+            drop: function(event, ui) {
+                const $dropZone = $(this);
+                const itemText = ui.draggable.data('item-text');
+                const rightIndex = ui.draggable.data('right-index');
+                const leftIndex = $dropZone.data('left-index');
+                const $question = $dropZone.closest('.quiz-question');
+                
+                // Clear previous match if any
+                const $hiddenInput = $question.find(`.match-answer[name*="[${leftIndex}]"]`);
+                const previousRightIndex = $hiddenInput.val();
+                if (previousRightIndex) {
+                    $question.find(`.draggable-item[data-right-index="${previousRightIndex}"]`).removeClass('used');
+                }
+                
+                // Clear this drop zone if it had an item
+                $dropZone.find('.dropped-item').remove();
+                $dropZone.removeClass('has-item');
+                
+                // Add new item to drop zone
+                const droppedItemHtml = `
+                    <div class="dropped-item">
+                        <span>${itemText}</span>
+                        <button type="button" class="remove-match" data-left-index="${leftIndex}" data-right-index="${rightIndex}">×</button>
+                    </div>
+                `;
+                $dropZone.html(droppedItemHtml).addClass('has-item');
+                
+                // Update hidden input
+                $hiddenInput.val(rightIndex);
+                
+                // Mark draggable item as used
+                ui.draggable.addClass('used');
+                
+                // Provide feedback
+                announceToScreenReader(`${itemText} matched with item ${parseInt(leftIndex) + 1}`);
             }
-            
-            // Clear previous match if any
-            const $hiddenInput = $question.find(`.match-answer[name*="[${leftIndex}]"]`);
-            const previousRightIndex = $hiddenInput.val();
-            if (previousRightIndex) {
-                $question.find(`.draggable-item[data-right-index="${previousRightIndex}"]`).removeClass('used');
-            }
-            
-            // Clear this drop zone if it had an item
-            $(this).find('.dropped-item').remove();
-            $(this).removeClass('has-item');
-            
-            // Add new item to drop zone
-            const droppedItemHtml = `
-                <div class="dropped-item">
-                    <span>${itemText}</span>
-                    <button type="button" class="remove-match" data-left-index="${leftIndex}" data-right-index="${rightIndex}">×</button>
-                </div>
-            `;
-            $(this).html(droppedItemHtml).addClass('has-item');
-            
-            // Update hidden input
-            $hiddenInput.val(rightIndex);
-            
-            // Mark draggable item as used
-            $draggableItem.addClass('used');
-            
-            // Provide audio feedback for screen readers
-            announceToScreenReader(`${itemText} matched with item ${parseInt(leftIndex) + 1}`);
         });
         
         // Handle remove match button
@@ -580,7 +711,8 @@ jQuery(document).ready(function($) {
             
             // Clear the drop zone
             const $dropZone = $(this).closest('.drop-zone');
-            $dropZone.html('<span class="drop-placeholder">Drop here</span>').removeClass('has-item');
+            $dropZone.html('<span class="drop-placeholder">' + 
+                (elearningQuiz.strings.drop_here || 'Drop here') + '</span>').removeClass('has-item');
             
             // Clear hidden input
             $question.find(`.match-answer[name*="[${leftIndex}]"]`).val('');
@@ -588,88 +720,11 @@ jQuery(document).ready(function($) {
             // Mark draggable item as available again
             $question.find(`.draggable-item[data-right-index="${rightIndex}"]`).removeClass('used');
             
-            // Provide audio feedback
+            // Provide feedback
             announceToScreenReader(`Match removed from item ${parseInt(leftIndex) + 1}`);
         });
         
-        // Touch support for mobile drag and drop
-        let touchItem = null;
-        
-        $(document).on('touchstart', '.word-item', function(e) {
-            if ($(this).hasClass('used')) return;
-            
-            touchItem = {
-                element: this,
-                word: $(this).data('word'),
-                startX: e.originalEvent.touches[0].clientX,
-                startY: e.originalEvent.touches[0].clientY
-            };
-            
-            $(this).addClass('dragging');
-        });
-        
-        $(document).on('touchmove', function(e) {
-            if (!touchItem) return;
-            
-            e.preventDefault();
-            const touch = e.originalEvent.touches[0];
-            
-            // Find element under touch point
-            const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
-            const $blankSpace = $(elementBelow).closest('.blank-space');
-            
-            // Remove previous highlights
-            $('.blank-space').removeClass('drop-target');
-            
-            // Highlight current target
-            if ($blankSpace.length > 0) {
-                $blankSpace.addClass('drop-target');
-            }
-        });
-        
-        $(document).on('touchend', function(e) {
-            if (!touchItem) return;
-            
-            const touch = e.originalEvent.changedTouches[0];
-            const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
-            const $blankSpace = $(elementBelow).closest('.blank-space');
-            
-            $('.blank-space').removeClass('drop-target');
-            $(touchItem.element).removeClass('dragging');
-            
-            if ($blankSpace.length > 0) {
-                const blankIndex = $blankSpace.data('blank-index');
-                const $question = $blankSpace.closest('.quiz-question');
-                const word = touchItem.word;
-                
-                // Check if word is already used
-                if (!$question.find(`.word-item[data-word="${word}"]`).hasClass('used')) {
-                    // Clear previous value if any
-                    const previousWord = $blankSpace.text();
-                    if (previousWord) {
-                        $question.find(`.word-item[data-word="${previousWord}"]`).removeClass('used');
-                    }
-                    
-                    // Set new value
-                    $blankSpace.text(word).addClass('filled');
-                    $question.find(`.blank-answer[data-blank-index="${blankIndex}"]`).val(word);
-                    
-                    // Mark word as used
-                    $question.find(`.word-item[data-word="${word}"]`).addClass('used');
-                    
-                    // Haptic feedback for mobile
-                    if (navigator.vibrate) {
-                        navigator.vibrate(50);
-                    }
-                    
-                    announceToScreenReader(`${word} placed in blank ${blankIndex + 1}`);
-                }
-            }
-            
-            touchItem = null;
-        });
-        
-        // Double-tap to remove word from blank (accessibility feature)
+        // Double-click to remove word from blank
         $(document).on('dblclick', '.blank-space.filled', function() {
             const word = $(this).text();
             const blankIndex = $(this).data('blank-index');
@@ -691,7 +746,7 @@ jQuery(document).ready(function($) {
             case 'ArrowLeft':
                 if (e.ctrlKey || e.metaKey) {
                     e.preventDefault();
-                    $('.prev-btn').click();
+                    $('.prev-btn:not(:disabled)').click();
                 }
                 break;
                 
@@ -700,7 +755,7 @@ jQuery(document).ready(function($) {
                     e.preventDefault();
                     if ($('.next-btn').is(':visible')) {
                         $('.next-btn').click();
-                    } else {
+                    } else if ($('.quiz-submit-btn').is(':visible')) {
                         $('.quiz-submit-btn').click();
                     }
                 }
@@ -711,7 +766,7 @@ jQuery(document).ready(function($) {
                     e.preventDefault();
                     if ($('.next-btn').is(':visible')) {
                         $('.next-btn').click();
-                    } else {
+                    } else if ($('.quiz-submit-btn').is(':visible')) {
                         $('.quiz-submit-btn').click();
                     }
                 }
@@ -768,9 +823,22 @@ jQuery(document).ready(function($) {
             html += displayDetailedResults(resultData.detailed_results);
         }
         
+        // Show difficult questions
+        if (resultData.difficult_questions && resultData.difficult_questions.length > 0) {
+            html += '<div class="difficult-questions">';
+            html += '<h4>' + (elearningQuiz.strings.difficult_questions || 'Most Challenging Questions') + '</h4>';
+            html += '<ul>';
+            resultData.difficult_questions.forEach(function(q) {
+                html += '<li>' + q.question_preview + ' (' + parseFloat(q.success_rate).toFixed(1) + '% success rate)</li>';
+            });
+            html += '</ul>';
+            html += '</div>';
+        }
+        
         // Action buttons
         if (!passed) {
-            html += '<button type="button" class="retry-btn" onclick="location.reload()">' + (elearningQuiz.strings.retry_quiz || 'Retry Quiz') + '</button>';
+            html += '<button type="button" class="retry-btn" onclick="location.reload()">' + 
+                (elearningQuiz.strings.retry_quiz || 'Retry Quiz') + '</button>';
         }
         
         html += '</div>';
@@ -804,15 +872,15 @@ jQuery(document).ready(function($) {
             html += '<div class="user-answer">';
             html += '<strong>' + (elearningQuiz.strings.your_answer || 'Your Answer') + ':</strong> ';
             html += '<span class="answer-value ' + (result.correct ? 'correct' : 'incorrect') + '">';
-            html += formatAnswerForDisplay(result.user_answer, result.question_type);
+            html += result.user_answer || (elearningQuiz.strings.no_answer || 'No answer provided');
             html += '</span>';
             html += '</div>';
             
-            if (!result.correct) {
+            if (!result.correct && result.correct_answer) {
                 html += '<div class="correct-answer">';
                 html += '<strong>' + (elearningQuiz.strings.correct_answer || 'Correct Answer') + ':</strong> ';
                 html += '<span class="answer-value correct">';
-                html += formatAnswerForDisplay(result.correct_answer, result.question_type);
+                html += result.correct_answer;
                 html += '</span>';
                 html += '</div>';
             }
@@ -823,33 +891,6 @@ jQuery(document).ready(function($) {
         
         html += '</div>';
         return html;
-    }
-    
-    function formatAnswerForDisplay(answer, questionType) {
-        if (!answer) return elearningQuiz.strings.no_answer || 'No answer provided';
-        
-        switch (questionType) {
-            case 'multiple_choice':
-                if (Array.isArray(answer)) {
-                    return answer.join(', ');
-                }
-                return answer;
-                
-            case 'fill_blanks':
-                if (Array.isArray(answer)) {
-                    return answer.filter(a => a).join(', ') || (elearningQuiz.strings.no_answer || 'No answer provided');
-                }
-                return answer;
-                
-            case 'matching':
-                if (typeof answer === 'object') {
-                    return Object.keys(answer).length + ' matches';
-                }
-                return answer;
-                
-            default:
-                return answer;
-        }
     }
     
     function formatTime(seconds) {
@@ -881,12 +922,15 @@ jQuery(document).ready(function($) {
             success: function(response) {
                 // Silent save - no user feedback needed
                 console.log('Progress auto-saved');
+            },
+            error: function() {
+                console.error('Failed to auto-save progress');
             }
         });
     }
     
     function showError(message) {
-        const $errorDiv = $('<div class="quiz-error" style="background: #fee2e2; border: 1px solid #fecaca; color: #991b1b; padding: 15px; border-radius: 6px; margin: 20px 0;">' + message + '</div>');
+        const $errorDiv = $('<div class="quiz-error" role="alert" style="background: #fee2e2; border: 1px solid #fecaca; color: #991b1b; padding: 15px; border-radius: 6px; margin: 20px 0;">' + message + '</div>');
         
         $('.elearning-quiz-container').prepend($errorDiv);
         
@@ -916,47 +960,21 @@ jQuery(document).ready(function($) {
         }, 1000);
     }
     
-    // Initialize accessibility features
-    function initializeAccessibility() {
-        // Add skip links
-        const $skipLink = $('<a href="#quiz-content" class="skip-link">' + (elearningQuiz.strings.skip_to_quiz || 'Skip to quiz content') + '</a>');
-        $('.elearning-quiz-container').prepend($skipLink);
-        
-        // Add landmark roles
-        $('.elearning-quiz-form').attr('role', 'main').attr('id', 'quiz-content');
-        $('.quiz-progress').attr('role', 'progressbar').attr('aria-label', 'Quiz Progress');
-        
-        // Update progress bar accessibility
-        updateProgressBarAccessibility();
-    }
-    
-    function updateProgressBarAccessibility() {
-        const percentage = ((currentQuiz.currentQuestion + 1) / currentQuiz.totalQuestions) * 100;
-        $('.quiz-progress').attr('aria-valuenow', currentQuiz.currentQuestion + 1)
-                          .attr('aria-valuemin', 1)
-                          .attr('aria-valuemax', currentQuiz.totalQuestions)
-                          .attr('aria-valuetext', `Question ${currentQuiz.currentQuestion + 1} of ${currentQuiz.totalQuestions}`);
-    }
-    
-    // Initialize when DOM is ready
-    initializeAccessibility();
-    
-    // Handle page visibility change (pause/resume timers)
-    document.addEventListener('visibilitychange', function() {
+    function handleVisibilityChange() {
         if (document.hidden) {
             // Page is hidden - pause timers
             console.log('Quiz paused');
+            // Could implement pause functionality here
         } else {
             // Page is visible - resume timers
             console.log('Quiz resumed');
             if (currentQuiz.attemptId) {
-                startQuestionTimer();
+                // Could implement resume functionality here
             }
         }
-    });
+    }
     
-    // Handle page unload (save progress)
-    window.addEventListener('beforeunload', function(e) {
+    function handlePageUnload(e) {
         if (currentQuiz.attemptId && Object.keys(currentQuiz.answers).length > 0) {
             autoSaveProgress();
             
@@ -965,16 +983,41 @@ jQuery(document).ready(function($) {
             e.returnValue = message;
             return message;
         }
-    });
+    }
+    
+    // Initialize accessibility features
+    function initializeAccessibility() {
+        // Add skip links
+        const $skipLink = $('<a href="#quiz-content" class="skip-link">' + 
+            (elearningQuiz.strings.skip_to_quiz || 'Skip to quiz content') + '</a>');
+        $('.elearning-quiz-container').prepend($skipLink);
+        
+        // Add landmark roles
+        $('.elearning-quiz-form').attr('role', 'main').attr('id', 'quiz-content');
+        $('.quiz-progress').attr('role', 'progressbar')
+                          .attr('aria-label', 'Quiz Progress')
+                          .attr('aria-valuemin', 1)
+                          .attr('aria-valuemax', currentQuiz.totalQuestions || 1);
+        
+        // Add live region for announcements
+        if (!$('#quiz-announcements').length) {
+            $('body').append('<div id="quiz-announcements" class="sr-only" aria-live="polite" aria-atomic="true"></div>');
+        }
+    }
+    
+    // Initialize when DOM is ready
+    initializeAccessibility();
     
     // Prevent context menu on quiz elements (prevent cheating)
     $('.elearning-quiz-container').on('contextmenu', function(e) {
-        e.preventDefault();
-        return false;
+        if ($(e.target).closest('.quiz-question').length > 0) {
+            e.preventDefault();
+            return false;
+        }
     });
     
     // Prevent text selection on certain elements
-    $('.word-item, .blank-space').css({
+    $('.word-item, .blank-space, .draggable-item').css({
         '-webkit-user-select': 'none',
         '-moz-user-select': 'none',
         '-ms-user-select': 'none',

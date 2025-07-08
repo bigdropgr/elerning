@@ -1062,3 +1062,183 @@
     white-space: nowrap;
     border: 0;
 }
+
+
+/* === QUIZ TIMER === */
+/* Add this section to your existing frontend.css file */
+
+.quiz-timer {
+    background: #f0f9ff;
+    border: 2px solid #3b82f6;
+    border-radius: 8px;
+    padding: 12px 20px;
+    margin-bottom: 20px;
+    text-align: center;
+    font-size: 18px;
+    font-weight: 600;
+    color: #1e40af;
+    transition: all 0.3s ease;
+}
+
+.quiz-timer.warning {
+    background: #fef3c7;
+    border-color: #f59e0b;
+    color: #d97706;
+    animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.02);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+.timer-label {
+    margin-right: 8px;
+    font-weight: 500;
+}
+
+.timer-display {
+    font-family: 'Courier New', monospace;
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 2px;
+}
+
+/* Time Up Modal */
+#time-up-modal .modal-content {
+    text-align: center;
+}
+
+#time-up-modal h3 {
+    color: #dc2626;
+    margin-bottom: 15px;
+}
+
+/* Skip Link (Accessibility) */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    z-index: 999;
+    padding: 1em;
+    background-color: #000;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 4px;
+}
+
+.skip-link:focus {
+    left: 50%;
+    transform: translateX(-50%);
+    top: 10px;
+}
+
+/* Difficult Questions Display */
+.difficult-questions {
+    background: #fef3c7;
+    border: 1px solid #fbbf24;
+    border-radius: 8px;
+    padding: 20px;
+    margin-top: 20px;
+}
+
+.difficult-questions h4 {
+    color: #d97706;
+    margin: 0 0 15px 0;
+    font-size: 18px;
+}
+
+.difficult-questions ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.difficult-questions li {
+    color: #92400e;
+    margin-bottom: 8px;
+}
+
+/* Question Result Details */
+.question-result {
+    background: #f9fafb;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 15px;
+    transition: all 0.3s ease;
+}
+
+.question-result.correct {
+    border-color: #10b981;
+}
+
+.question-result.incorrect {
+    border-color: #ef4444;
+}
+
+.question-number {
+    font-weight: 700;
+    color: #6b7280;
+    margin-bottom: 10px;
+    font-size: 14px;
+    text-transform: uppercase;
+}
+
+.answer-comparison {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.user-answer,
+.correct-answer {
+    margin-bottom: 10px;
+}
+
+.answer-value {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 4px;
+    margin-left: 8px;
+}
+
+.answer-value.correct {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.answer-value.incorrect {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* Mobile Timer Styles */
+@media (max-width: 640px) {
+    .quiz-timer {
+        font-size: 16px;
+        padding: 10px 15px;
+    }
+    
+    .timer-display {
+        font-size: 20px;
+    }
+}
+
+/* High Contrast Mode Support */
+@media (prefers-contrast: high) {
+    .quiz-timer {
+        border-width: 3px;
+    }
+    
+    .quiz-timer.warning {
+        background: #000;
+        color: #fff;
+        border-color: #fff;
+    }
+}

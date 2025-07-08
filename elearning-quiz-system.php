@@ -94,6 +94,7 @@ class ELearningQuizSystem {
         require_once ELEARNING_QUIZ_PLUGIN_DIR . 'includes/class-user-roles.php';
         require_once ELEARNING_QUIZ_PLUGIN_DIR . 'includes/class-analytics.php';
         require_once ELEARNING_QUIZ_PLUGIN_DIR . 'includes/class-shortcodes.php';
+        require_once ELEARNING_QUIZ_PLUGIN_DIR . 'includes/class-import-export.php';
     }
     
     /**
@@ -140,6 +141,16 @@ class ELearningQuizSystem {
         
         // Initialize shortcodes
         new ELearning_Shortcodes();
+        
+        // Initialize import/export
+        new ELearning_Import_Export();
+        
+        // Schedule cleanup cron job
+        if (!wp_next_scheduled('elearning_cleanup_abandoned_quizzes')) {
+            wp_schedule_event(time(), 'hourly', 'elearning_cleanup_abandoned_quizzes');
+        }
+        
+        add_action('elearning_cleanup_abandoned_quizzes', [ELearning_Database::class, 'trackQuizAbandonment']);
     }
     
     /**

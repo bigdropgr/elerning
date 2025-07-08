@@ -394,7 +394,8 @@ class ELearning_Post_Types {
     }
     
     /**
-     * Render quiz settings meta box
+     * Render quiz settings meta box - UPDATED VERSION
+     * Replace the existing renderQuizSettingsMetaBox method in class-post-types.php
      */
     public function renderQuizSettingsMetaBox($post): void {
         wp_nonce_field('quiz_settings_nonce', 'quiz_settings_nonce');
@@ -402,6 +403,9 @@ class ELearning_Post_Types {
         $passing_score = get_post_meta($post->ID, '_passing_score', true) ?: 70;
         $min_questions = get_post_meta($post->ID, '_min_questions_to_show', true) ?: 5;
         $show_results = get_post_meta($post->ID, '_show_results_immediately', true) ?: 'yes';
+        $time_limit = get_post_meta($post->ID, '_time_limit', true) ?: 0;
+        $randomize_questions = get_post_meta($post->ID, '_randomize_questions', true) ?: 'no';
+        $randomize_answers = get_post_meta($post->ID, '_randomize_answers', true) ?: 'no';
         
         ?>
         <table class="form-table">
@@ -419,7 +423,7 @@ class ELearning_Post_Types {
                 </td>
             </tr>
             <tr>
-                <th><label for="min_questions_to_show"><?php _e('Minimum Questions to Show', 'elearning-quiz'); ?></label></th>
+                <th><label for="min_questions_to_show"><?php _e('Questions to Show', 'elearning-quiz'); ?></label></th>
                 <td>
                     <input type="number" 
                            id="min_questions_to_show" 
@@ -427,21 +431,248 @@ class ELearning_Post_Types {
                            value="<?php echo esc_attr($min_questions); ?>" 
                            min="1" 
                            step="1" />
-                    <p class="description"><?php _e('Minimum number of questions to show from the question bank.', 'elearning-quiz'); ?></p>
+                    <p class="description"><?php _e('Number of questions to show from the question bank. Leave empty to show all.', 'elearning-quiz'); ?></p>
                 </td>
             </tr>
             <tr>
-                <th><label for="show_results_immediately"><?php _e('Show Results Immediately', 'elearning-quiz'); ?></label></th>
+                <th><label for="time_limit"><?php _e('Time Limit (minutes)', 'elearning-quiz'); ?></label></th>
+                <td>
+                    <input type="number" 
+                           id="time_limit" 
+                           name="time_limit" 
+                           value="<?php echo esc_attr($time_limit); ?>" 
+                           min="0" 
+                           step="1" />
+                    <p class="description"><?php _e('Time limit in minutes. Set to 0 for no time limit.', 'elearning-quiz'); ?></p>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="show_results_immediately"><?php _e('Show Results', 'elearning-quiz'); ?></label></th>
                 <td>
                     <select name="show_results_immediately" id="show_results_immediately">
-                        <option value="yes" <?php selected($show_results, 'yes'); ?>><?php _e('Yes', 'elearning-quiz'); ?></option>
-                        <option value="no" <?php selected($show_results, 'no'); ?>><?php _e('No', 'elearning-quiz'); ?></option>
+                        <option value="yes" <?php selected($show_results, 'yes'); ?>><?php _e('Yes - Show correct answers after submission', 'elearning-quiz'); ?></option>
+                        <option value="no" <?php selected($show_results, 'no'); ?>><?php _e('No - Only show score', 'elearning-quiz'); ?></option>
                     </select>
-                    <p class="description"><?php _e('Whether to show correct/incorrect answers immediately after submission.', 'elearning-quiz'); ?></p>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="randomize_questions"><?php _e('Randomize Questions', 'elearning-quiz'); ?></label></th>
+                <td>
+                    <select name="randomize_questions" id="randomize_questions">
+                        <option value="yes" <?php selected($randomize_questions, 'yes'); ?>><?php _e('Yes', 'elearning-quiz'); ?></option>
+                        <option value="no" <?php selected($randomize_questions, 'no'); ?>><?php _e('No', 'elearning-quiz'); ?></option>
+                    </select>
+                    <p class="description"><?php _e('Show questions in random order for each attempt.', 'elearning-quiz'); ?></p>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="randomize_answers"><?php _e('Randomize Answers', 'elearning-quiz'); ?></label></th>
+                <td>
+                    <select name="randomize_answers" id="randomize_answers">
+                        <option value="yes" <?php selected($randomize_answers, 'yes'); ?>><?php _e('Yes', 'elearning-quiz'); ?></option>
+                        <option value="no" <?php selected($randomize_answers, 'no'); ?>><?php _e('No', 'elearning-quiz'); ?></option>
+                    </select>
+                    <p class="description"><?php _e('Show answer options in random order (for multiple choice questions).', 'elearning-quiz'); ?></p>
                 </td>
             </tr>
         </table>
         <?php
+    }
+
+    /**
+     * Save quiz meta data - UPDATED VERSION
+     * Replace the existing saveQuizMeta method in class-post-types.php
+     */
+    private function saveQuizMeta($post_id): void {
+        // Save quiz settings
+        if (isset($_POST['quiz_settings_nonce']) && wp_verify_nonce($_POST['quiz_settings_nonce'], 'quiz_settings_nonce')) {
+            $passing_score = isset($_POST['passing_score']) ? intval($_POST['passing_score']) : 70;
+            $min_questions = isset($_POST['min_questions_to_show']) ? intval($_POST['min_questions_to_show']) : 5;
+            $show_results = isset($_POST['show_results_immediately']) ? sanitize_text_field($_POST['show_results_immediately']) : 'yes';
+            $time_limit = isset($_POST['time_limit']) ? intval($_POST['time_limit']) : 0;
+            $randomize_questions = isset($_POST['randomize_questions']) ? sanitize_text_field($_POST['randomize_questions']) : 'no';
+            $randomize_answers = isset($_POST['randomize_answers']) ? sanitize_text_field($_POST['randomize_answers']) : 'no';
+            
+            // Validate values
+            $passing_score = max(0, min(100, $passing_score));
+            $min_questions = max(1, $min_questions);
+            $time_limit = max(0, $time_limit);
+            
+            update_post_meta($post_id, '_passing_score', $passing_score);
+            update_post_meta($post_id, '_min_questions_to_show', $min_questions);
+            update_post_meta($post_id, '_show_results_immediately', $show_results);
+            update_post_meta($post_id, '_time_limit', $time_limit);
+            update_post_meta($post_id, '_randomize_questions', $randomize_questions);
+            update_post_meta($post_id, '_randomize_answers', $randomize_answers);
+        }
+        
+        // Save associated lesson
+        if (isset($_POST['quiz_lesson_nonce']) && wp_verify_nonce($_POST['quiz_lesson_nonce'], 'quiz_lesson_nonce')) {
+            $old_lesson_id = get_post_meta($post_id, '_associated_lesson', true);
+            $new_lesson_id = isset($_POST['associated_lesson']) ? intval($_POST['associated_lesson']) : '';
+            
+            // Update quiz → lesson association
+            update_post_meta($post_id, '_associated_lesson', $new_lesson_id);
+            
+            // Remove old lesson → quiz association
+            if ($old_lesson_id && $old_lesson_id != $new_lesson_id) {
+                delete_post_meta($old_lesson_id, '_associated_quiz');
+            }
+            
+            // Add new lesson → quiz association
+            if ($new_lesson_id) {
+                update_post_meta($new_lesson_id, '_associated_quiz', $post_id);
+            }
+        }
+        
+        // Save quiz questions with validation
+        if (isset($_POST['quiz_questions_nonce']) && wp_verify_nonce($_POST['quiz_questions_nonce'], 'quiz_questions_nonce')) {
+            if (isset($_POST['quiz_questions']) && is_array($_POST['quiz_questions'])) {
+                $questions = [];
+                
+                foreach ($_POST['quiz_questions'] as $question_data) {
+                    // Skip empty questions
+                    if (empty($question_data['question']) || empty($question_data['type'])) {
+                        continue;
+                    }
+                    
+                    // Validate question type
+                    $allowed_types = ['multiple_choice', 'true_false', 'fill_blanks', 'matching'];
+                    $question_type = sanitize_text_field($question_data['type']);
+                    if (!in_array($question_type, $allowed_types)) {
+                        $question_type = 'multiple_choice';
+                    }
+                    
+                    $question = [
+                        'type' => $question_type,
+                        'question' => sanitize_textarea_field($question_data['question'])
+                    ];
+                    
+                    // Sanitize question-specific data based on type
+                    switch ($question['type']) {
+                        case 'multiple_choice':
+                            $options = [];
+                            $correct_answers = [];
+                            
+                            if (isset($question_data['options']) && is_array($question_data['options'])) {
+                                foreach ($question_data['options'] as $index => $option) {
+                                    if (!empty(trim($option))) {
+                                        $options[$index] = sanitize_text_field($option);
+                                    }
+                                }
+                            }
+                            
+                            if (isset($question_data['correct_answers']) && is_array($question_data['correct_answers'])) {
+                                foreach ($question_data['correct_answers'] as $answer) {
+                                    if (isset($options[$answer])) {
+                                        $correct_answers[] = intval($answer);
+                                    }
+                                }
+                            }
+                            
+                            // Validate we have at least 2 options and 1 correct answer
+                            if (count($options) >= 2 && count($correct_answers) > 0) {
+                                $question['options'] = $options;
+                                $question['correct_answers'] = $correct_answers;
+                            } else {
+                                continue; // Skip invalid question
+                            }
+                            break;
+                            
+                        case 'fill_blanks':
+                            $text_with_blanks = sanitize_textarea_field($question_data['text_with_blanks'] ?? '');
+                            $word_bank = [];
+                            
+                            // Validate blanks exist
+                            if (strpos($text_with_blanks, '{{blank}}') === false) {
+                                continue; // Skip if no blanks
+                            }
+                            
+                            if (isset($question_data['word_bank']) && is_array($question_data['word_bank'])) {
+                                foreach ($question_data['word_bank'] as $word) {
+                                    if (!empty(trim($word))) {
+                                        $word_bank[] = sanitize_text_field($word);
+                                    }
+                                }
+                            }
+                            
+                            // Validate word bank has enough words
+                            $blank_count = substr_count($text_with_blanks, '{{blank}}');
+                            if (count($word_bank) >= $blank_count) {
+                                $question['text_with_blanks'] = $text_with_blanks;
+                                $question['word_bank'] = $word_bank;
+                            } else {
+                                continue; // Skip invalid question
+                            }
+                            break;
+                            
+                        case 'true_false':
+                            $question['correct_answer'] = sanitize_text_field($question_data['correct_answer'] ?? 'true');
+                            if (!in_array($question['correct_answer'], ['true', 'false'])) {
+                                $question['correct_answer'] = 'true';
+                            }
+                            break;
+                            
+                        case 'matching':
+                            $left_column = [];
+                            $right_column = [];
+                            $matches = [];
+                            
+                            // Validate left column
+                            if (isset($question_data['left_column']) && is_array($question_data['left_column'])) {
+                                foreach ($question_data['left_column'] as $index => $item) {
+                                    if (!empty(trim($item))) {
+                                        $left_column[$index] = sanitize_text_field($item);
+                                    }
+                                }
+                            }
+                            
+                            // Validate right column
+                            if (isset($question_data['right_column']) && is_array($question_data['right_column'])) {
+                                foreach ($question_data['right_column'] as $index => $item) {
+                                    if (!empty(trim($item))) {
+                                        $right_column[$index] = sanitize_text_field($item);
+                                    }
+                                }
+                            }
+                            
+                            // Validate matches
+                            if (isset($question_data['matches']) && is_array($question_data['matches'])) {
+                                foreach ($question_data['matches'] as $match) {
+                                    if (isset($match['left']) && isset($match['right'])) {
+                                        $left_idx = intval($match['left']);
+                                        $right_idx = intval($match['right']);
+                                        
+                                        if (isset($left_column[$left_idx]) && isset($right_column[$right_idx])) {
+                                            $matches[] = [
+                                                'left' => $left_idx,
+                                                'right' => $right_idx
+                                            ];
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Validate we have items and matches
+                            if (count($left_column) >= 2 && count($right_column) >= 2 && count($matches) > 0) {
+                                $question['left_column'] = $left_column;
+                                $question['right_column'] = $right_column;
+                                $question['matches'] = $matches;
+                            } else {
+                                continue; // Skip invalid question
+                            }
+                            break;
+                    }
+                    
+                    $questions[] = $question;
+                }
+                
+                // Only save if we have valid questions
+                if (!empty($questions)) {
+                    update_post_meta($post_id, '_quiz_questions', $questions);
+                }
+            }
+        }
     }
     
     /**
@@ -454,6 +685,14 @@ class ELearning_Post_Types {
         if (!is_array($questions) || empty($questions)) {
             $questions = [['type' => 'multiple_choice', 'question' => '', 'options' => [''], 'correct_answers' => []]];
         }
+        
+        // Add import/export buttons
+        echo '<div class="quiz-questions-toolbar">';
+        echo '<button type="button" class="button" onclick="openImportModal()">' . __('Import Questions', 'elearning-quiz') . '</button>';
+        if (!empty($questions) && !empty($questions[0]['question'])) {
+            echo ' <a href="' . admin_url('admin-ajax.php?action=elearning_export_questions&quiz_id=' . $post->ID . '&nonce=' . wp_create_nonce('elearning_export_nonce')) . '" class="button">' . __('Export Questions', 'elearning-quiz') . '</a>';
+        }
+        echo '</div>';
         
         echo '<div id="quiz-questions-container">';
         
@@ -468,6 +707,20 @@ class ELearning_Post_Types {
         echo '<script type="text/template" id="question-template">';
         $this->renderQuestionFields('{{INDEX}}', ['type' => 'multiple_choice', 'question' => '', 'options' => [''], 'correct_answers' => []]);
         echo '</script>';
+        
+        // Add some styling
+        echo '<style>
+        .quiz-questions-toolbar {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f0f0f1;
+            border-radius: 4px;
+        }
+        
+        .quiz-questions-toolbar .button {
+            margin-right: 10px;
+        }
+        </style>';
     }
     
     /**

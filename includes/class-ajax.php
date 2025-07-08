@@ -1,6 +1,6 @@
 <?php
 /**
- * AJAX Class - Complete Quiz Functionality
+ * AJAX Class - Complete Quiz Functionality with Rate Limiting
  * 
  * Handles all AJAX requests for the e-learning system
  */
@@ -25,13 +25,17 @@ class ELearning_Ajax {
         // Admin-related AJAX handlers
         add_action('wp_ajax_elearning_init_editor', [$this, 'initializeEditor']);
         
-        // Lesson progress AJAX handlers (for future implementation)
+        // Lesson progress AJAX handlers
         add_action('wp_ajax_elearning_update_lesson_progress', [$this, 'updateLessonProgress']);
         add_action('wp_ajax_nopriv_elearning_update_lesson_progress', [$this, 'updateLessonProgress']);
+        
+        // New: Get quiz time limit
+        add_action('wp_ajax_elearning_get_quiz_settings', [$this, 'getQuizSettings']);
+        add_action('wp_ajax_nopriv_elearning_get_quiz_settings', [$this, 'getQuizSettings']);
     }
     
     /**
-     * Start a new quiz attempt
+     * Start a new quiz attempt with rate limiting
      */
     public function startQuiz(): void {
         // Verify nonce
@@ -51,32 +55,55 @@ class ELearning_Ajax {
             wp_send_json_error(__('Quiz not found or not available', 'elearning-quiz'));
         }
         
+        // Rate limiting check
+        $user_session = ELearning_Database::getOrCreateUserSession();
+        $attempts_key = 'quiz_attempts_' . $user_session;
+        $attempts_in_last_minute = get_transient($attempts_key) ?: 0;
+        
+        if ($attempts_in_last_minute > 5) {
+            wp_send_json_error(__('Too many attempts. Please wait a minute before trying again.', 'elearning-quiz'));
+        }
+        
         // Get quiz questions
         $questions = get_post_meta($quiz_id, '_quiz_questions', true) ?: [];
         if (empty($questions)) {
             wp_send_json_error(__('This quiz has no questions', 'elearning-quiz'));
         }
         
+        // Validate questions before starting
+        $valid_questions = [];
+        foreach ($questions as $index => $question) {
+            if (!empty($question['question']) && !empty($question['type'])) {
+                $valid_questions[] = $index;
+            }
+        }
+        
+        if (empty($valid_questions)) {
+            wp_send_json_error(__('No valid questions found in this quiz', 'elearning-quiz'));
+        }
+        
         // Start quiz attempt
-        $attempt_id = ELearning_Database::startQuizAttempt($quiz_id);
+        $attempt_id = ELearning_Database::startQuizAttempt($quiz_id, $valid_questions);
         
         if (!$attempt_id) {
-            wp_send_json_error(__('Failed to start quiz attempt', 'elearning-quiz'));
+            wp_send_json_error(__('Failed to start quiz attempt. Please try again.', 'elearning-quiz'));
         }
         
         // Get quiz settings
-        $min_questions = get_post_meta($quiz_id, '_min_questions_to_show', true) ?: count($questions);
-        $total_questions = min($min_questions, count($questions));
+        $min_questions = get_post_meta($quiz_id, '_min_questions_to_show', true) ?: count($valid_questions);
+        $total_questions = min($min_questions, count($valid_questions));
+        $time_limit = get_post_meta($quiz_id, '_time_limit', true) ?: 0;
         
         wp_send_json_success([
             'attempt_id' => $attempt_id,
             'total_questions' => $total_questions,
+            'time_limit' => intval($time_limit),
             'message' => __('Quiz started successfully', 'elearning-quiz')
         ]);
     }
     
     /**
-     * Submit quiz and calculate results
+     * Submit quiz and calculate results with improved validation
      */
     public function submitQuiz(): void {
         // Verify nonce
@@ -107,6 +134,15 @@ class ELearning_Ajax {
             wp_send_json_error(__('This quiz has already been submitted', 'elearning-quiz'));
         }
         
+        // Check for timeout
+        $time_limit = get_post_meta($attempt['quiz_id'], '_time_limit', true) ?: 0;
+        if ($time_limit > 0) {
+            $elapsed_time = time() - strtotime($attempt['start_time']);
+            if ($elapsed_time > ($time_limit * 60)) {
+                wp_send_json_error(__('Quiz time limit exceeded', 'elearning-quiz'));
+            }
+        }
+        
         // Get quiz data
         $quiz_id = $attempt['quiz_id'];
         $quiz = get_post($quiz_id);
@@ -117,6 +153,11 @@ class ELearning_Ajax {
         // Parse answers
         $user_answers = json_decode($answers_json, true) ?: [];
         $question_timings = json_decode($question_timings_json, true) ?: [];
+        
+        // Validate answers
+        if (empty($user_answers)) {
+            wp_send_json_error(__('No answers provided', 'elearning-quiz'));
+        }
         
         // Calculate results
         $results = $this->calculateQuizResults($questions, $user_answers, $passing_score);
@@ -143,13 +184,17 @@ class ELearning_Ajax {
         }
         
         // Complete the attempt
-        ELearning_Database::completeQuizAttempt(
+        $completed = ELearning_Database::completeQuizAttempt(
             $attempt_id,
             $results['score'],
             $results['total_questions'],
             $results['correct_answers'],
             $passing_score
         );
+        
+        if (!$completed) {
+            wp_send_json_error(__('Failed to save quiz results', 'elearning-quiz'));
+        }
         
         // Prepare response data
         $response_data = [
@@ -166,6 +211,9 @@ class ELearning_Ajax {
         if ($show_results === 'yes') {
             $response_data['detailed_results'] = $this->getDetailedResults($questions, $user_answers);
         }
+        
+        // Get difficult questions for this quiz
+        $response_data['difficult_questions'] = ELearning_Database::getDifficultQuestions($quiz_id, 3);
         
         wp_send_json_success($response_data);
     }
@@ -187,13 +235,44 @@ class ELearning_Ajax {
             wp_send_json_error(__('Invalid attempt ID', 'elearning-quiz'));
         }
         
-        // For now, just acknowledge the save
-        // In a more advanced version, we could store progress in a separate table
+        // Store progress in transient (temporary storage)
+        $progress_key = 'quiz_progress_' . $attempt_id;
+        set_transient($progress_key, [
+            'current_question' => $current_question,
+            'answers' => json_decode($answers_json, true),
+            'saved_at' => current_time('mysql')
+        ], HOUR_IN_SECONDS);
+        
         wp_send_json_success(['message' => __('Progress saved', 'elearning-quiz')]);
     }
     
     /**
-     * Calculate quiz results
+     * Get quiz settings including time limit
+     */
+    public function getQuizSettings(): void {
+        // Verify nonce
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'elearning_quiz_nonce')) {
+            wp_send_json_error(__('Security check failed', 'elearning-quiz'));
+        }
+        
+        $quiz_id = intval($_POST['quiz_id'] ?? 0);
+        
+        if (!$quiz_id) {
+            wp_send_json_error(__('Invalid quiz ID', 'elearning-quiz'));
+        }
+        
+        $settings = [
+            'time_limit' => get_post_meta($quiz_id, '_time_limit', true) ?: 0,
+            'passing_score' => get_post_meta($quiz_id, '_passing_score', true) ?: 70,
+            'show_results' => get_post_meta($quiz_id, '_show_results_immediately', true) ?: 'yes',
+            'min_questions' => get_post_meta($quiz_id, '_min_questions_to_show', true) ?: 0
+        ];
+        
+        wp_send_json_success($settings);
+    }
+    
+    /**
+     * Calculate quiz results with improved validation
      */
     private function calculateQuizResults($questions, $user_answers, $passing_score): array {
         $total_questions = count($user_answers);
@@ -202,6 +281,12 @@ class ELearning_Ajax {
         foreach ($user_answers as $question_index => $user_answer) {
             if (isset($questions[$question_index])) {
                 $question = $questions[$question_index];
+                
+                // Validate question has required fields
+                if (empty($question['type']) || empty($question['question'])) {
+                    continue;
+                }
+                
                 $correct_answer = $this->getCorrectAnswer($question);
                 
                 if ($this->isAnswerCorrect($question, $user_answer, $correct_answer)) {
@@ -244,7 +329,7 @@ class ELearning_Ajax {
     }
     
     /**
-     * Check if user answer is correct
+     * Check if user answer is correct with improved matching logic
      */
     private function isAnswerCorrect($question, $user_answer, $correct_answer): bool {
         switch ($question['type']) {
@@ -254,12 +339,15 @@ class ELearning_Ajax {
                     if (!is_array($user_answer)) {
                         $user_answer = [$user_answer];
                     }
+                    // Convert to integers and sort for comparison
+                    $user_answer = array_map('intval', $user_answer);
+                    $correct_answer = array_map('intval', $correct_answer);
                     sort($user_answer);
                     sort($correct_answer);
                     return $user_answer === $correct_answer;
                 } else {
                     // Single correct answer
-                    return $user_answer == $correct_answer;
+                    return intval($user_answer) === intval($correct_answer);
                 }
                 
             case 'true_false':
@@ -275,26 +363,32 @@ class ELearning_Ajax {
                 $expected_answers = $this->extractExpectedAnswers($text_with_blanks, $question['word_bank'] ?? []);
                 
                 // Check each blank
+                $all_correct = true;
                 foreach ($user_answer as $index => $answer) {
                     if (!isset($expected_answers[$index])) {
                         continue;
                     }
                     
                     $expected = $expected_answers[$index];
+                    $answer = trim(strtolower($answer));
+                    
                     if (is_array($expected)) {
                         // Multiple acceptable answers
-                        if (!in_array(trim($answer), $expected)) {
-                            return false;
+                        $expected_lower = array_map('strtolower', array_map('trim', $expected));
+                        if (!in_array($answer, $expected_lower)) {
+                            $all_correct = false;
+                            break;
                         }
                     } else {
                         // Single expected answer
-                        if (trim($answer) !== trim($expected)) {
-                            return false;
+                        if ($answer !== trim(strtolower($expected))) {
+                            $all_correct = false;
+                            break;
                         }
                     }
                 }
                 
-                return true;
+                return $all_correct;
                 
             case 'matching':
                 if (!is_array($user_answer) || !is_array($correct_answer)) {
@@ -310,7 +404,7 @@ class ELearning_Ajax {
                         continue;
                     }
                     
-                    if (!isset($user_answer[$left_index]) || $user_answer[$left_index] != $right_index) {
+                    if (!isset($user_answer[$left_index]) || intval($user_answer[$left_index]) !== intval($right_index)) {
                         return false;
                     }
                 }
@@ -326,9 +420,17 @@ class ELearning_Ajax {
      * Extract expected answers from fill-in-the-blanks text
      */
     private function extractExpectedAnswers($text_with_blanks, $word_bank): array {
-        // For now, we'll use the word bank in order
+        // Count the number of blanks in the text
+        $blank_count = substr_count($text_with_blanks, '{{blank}}');
+        
+        // For simple implementation, we'll use the word bank in order
         // In a more advanced version, we could parse the text more intelligently
-        return $word_bank;
+        $expected_answers = [];
+        for ($i = 0; $i < $blank_count && $i < count($word_bank); $i++) {
+            $expected_answers[$i] = $word_bank[$i];
+        }
+        
+        return $expected_answers;
     }
     
     /**
@@ -343,17 +445,67 @@ class ELearning_Ajax {
                 $correct_answer = $this->getCorrectAnswer($question);
                 $is_correct = $this->isAnswerCorrect($question, $user_answer, $correct_answer);
                 
+                // Format answers for display
+                $formatted_user_answer = $this->formatAnswerForDisplay($user_answer, $question);
+                $formatted_correct_answer = $this->formatAnswerForDisplay($correct_answer, $question);
+                
                 $detailed_results[] = [
                     'question' => wp_strip_all_tags($question['question']),
                     'question_type' => $question['type'],
-                    'user_answer' => $user_answer,
-                    'correct_answer' => $correct_answer,
+                    'user_answer' => $formatted_user_answer,
+                    'correct_answer' => $formatted_correct_answer,
+                    'user_answer_raw' => $user_answer,
+                    'correct_answer_raw' => $correct_answer,
                     'correct' => $is_correct
                 ];
             }
         }
         
         return $detailed_results;
+    }
+    
+    /**
+     * Format answer for display
+     */
+    private function formatAnswerForDisplay($answer, $question): string {
+        switch ($question['type']) {
+            case 'multiple_choice':
+                if (is_array($answer)) {
+                    $options = [];
+                    foreach ($answer as $index) {
+                        if (isset($question['options'][$index])) {
+                            $options[] = $question['options'][$index];
+                        }
+                    }
+                    return implode(', ', $options);
+                } else {
+                    return $question['options'][$answer] ?? '';
+                }
+                
+            case 'true_false':
+                return ucfirst($answer);
+                
+            case 'fill_blanks':
+                if (is_array($answer)) {
+                    return implode(', ', array_filter($answer));
+                }
+                return $answer;
+                
+            case 'matching':
+                if (is_array($answer)) {
+                    $matches = [];
+                    foreach ($answer as $left => $right) {
+                        if (isset($question['left_column'][$left]) && isset($question['right_column'][$right])) {
+                            $matches[] = $question['left_column'][$left] . ' → ' . $question['right_column'][$right];
+                        }
+                    }
+                    return implode('; ', $matches);
+                }
+                return '';
+                
+            default:
+                return is_array($answer) ? implode(', ', $answer) : $answer;
+        }
     }
     
     /**
@@ -410,7 +562,7 @@ class ELearning_Ajax {
     }
     
     /**
-     * Update lesson progress (placeholder for lesson functionality)
+     * Update lesson progress with improved tracking
      */
     public function updateLessonProgress(): void {
         // Verify nonce
@@ -428,6 +580,12 @@ class ELearning_Ajax {
             wp_send_json_error(__('Invalid lesson ID', 'elearning-quiz'));
         }
         
+        // Validate lesson exists
+        $lesson = get_post($lesson_id);
+        if (!$lesson || $lesson->post_type !== 'elearning_lesson') {
+            wp_send_json_error(__('Lesson not found', 'elearning-quiz'));
+        }
+        
         // Update lesson progress
         $result = ELearning_Database::updateLessonProgress(
             $lesson_id,
@@ -438,7 +596,29 @@ class ELearning_Ajax {
         );
         
         if ($result) {
-            wp_send_json_success(['message' => __('Progress updated', 'elearning-quiz')]);
+            // Get updated progress for all sections
+            $user_session = ELearning_Database::getOrCreateUserSession();
+            $all_progress = ELearning_Database::getLessonProgress($lesson_id, $user_session);
+            
+            // Calculate overall progress
+            $sections = get_post_meta($lesson_id, '_lesson_sections', true) ?: [];
+            $total_sections = count($sections);
+            $completed_sections = 0;
+            
+            foreach ($all_progress as $progress) {
+                if (!empty($progress['completed'])) {
+                    $completed_sections++;
+                }
+            }
+            
+            $overall_progress = $total_sections > 0 ? ($completed_sections / $total_sections) * 100 : 0;
+            
+            wp_send_json_success([
+                'message' => __('Progress updated', 'elearning-quiz'),
+                'overall_progress' => round($overall_progress, 2),
+                'completed_sections' => $completed_sections,
+                'total_sections' => $total_sections
+            ]);
         } else {
             wp_send_json_error(__('Failed to update progress', 'elearning-quiz'));
         }
